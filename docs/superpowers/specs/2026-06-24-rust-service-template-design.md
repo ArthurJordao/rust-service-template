@@ -187,5 +187,32 @@ Middleware/layer order (outermost → inner): CORS → correlation-id/trace → 
 | **2** | `domain-auth` — JWT **issuance**: register / login / refresh / logout, Redis token revocation, admin scopes. Becomes the real producer of `UserRegistered`, replacing the dev stand-in |
 | **3** | `web/` — **React SPA** (Vite + TS + Tailwind + shadcn) consuming JSON APIs: login, account views, and `/admin/*` route group (DLQ inspect/replay, users) |
 | **4+** | `domain-notification` and further domains via `new-domain.sh` |
+| **Templatize** (after a working slice) | Turn the repo into a reusable project template via `cargo generate` — see §11 |
+| **API schema / typed TS client** (future, open) | OpenAPI + generated TypeScript client for frontend↔backend schema guarantees — see §12 |
 
 Known future branch (not template scope): an **SSR** frontend (Next.js/Remix) for SEO-critical public surfaces (e.g. the patient-facing "find a psychologist" marketplace), hitting the same JSON APIs. The API-first backend means this is additive and changes nothing server-side.
+
+---
+
+## 11. Templating (reusable project base)
+
+**Decision:** use **`cargo generate`** as the template mechanism (the idiomatic Rust approach: prompts for a project name and substitutes placeholders across `Cargo.toml`s, the app/binary name, docker-compose DB name, `.env.example`, etc.).
+
+**Approach — start with (B), revisit (A) later:**
+- **(B) Working-reference + rename (now):** keep concrete names (`rust-service-template`, `domain-account`) so the repo always `cargo build`s and stays a real, runnable reference. Generation renames the known strings via a small `cargo generate` config / post-generation hook. Chosen because a template you can also just run and see working is more valuable while the project is young.
+- **(A) Template-first (later, optional):** once the system is fully working and stable, optionally migrate to native `{{project-name}}` placeholders. The repo would then exist to be generated (working reference moves to a generated instance or a `reference` branch).
+
+**Sequencing:** templating does **not** block Spec 1. Build the concrete working version first; add the template layer as a separate step once a slice runs end-to-end. The B→A switch later is cheap and reversible.
+
+**Likely generate-time parameters:** project/workspace name, app binary name, database name, default port, CORS origin; optional yes/no prompt to include the example `domain-account` or start from a bare placeholder domain.
+
+## 12. API schema / typed TypeScript client (future spec — open)
+
+**Goal:** compile-time schema guarantees between the React frontend and the Rust services — calling a wrong path, passing the wrong params, or mismatching a request/response body should be a TypeScript error.
+
+**Status: open / not committed.** To be designed in its own brainstorm → spec → plan cycle. Current lean is the **OpenAPI route** over plain type-sharing, because the goal is about *calling* endpoints (the whole contract), not just sharing types:
+
+- **Leaning toward `utoipa`** (annotate axum handlers + DTOs → generate an OpenAPI doc; `app` aggregates each domain's paths/schemas into one `/openapi.json`) paired on the frontend with `openapi-typescript` (types) + `openapi-fetch` (tiny typed client). Bonus: Swagger UI for free. Cost: annotation boilerplate on handlers/DTOs.
+- **Alternative considered:** `ts-rs` (derive `TS` to emit `.ts` interfaces) — lighter, but shares only *types*, not endpoint contracts, so it does not catch wrong-path/wrong-param calls.
+
+**Decision to make in that spec:** utoipa/OpenAPI (full typed client) vs ts-rs (shared types only); whether to bake annotations in incrementally or retrofit; and the `make gen-types` regeneration workflow. Keep the open question flagged: the Spec-1 DTOs are few, so retrofitting utoipa later is inexpensive.

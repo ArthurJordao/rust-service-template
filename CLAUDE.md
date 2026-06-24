@@ -73,5 +73,12 @@ becomes the real producer of `user.registered`, replacing the dev stand-in).
 Spec 3 = `web/` React SPA (Vite + TS + Tailwind + shadcn) with `/admin/*` route
 group. Spec 4+ = `domain-notification` and further domains.
 
-When you finish Spec 1, brainstorm + spec + plan Spec 2 before implementing it
-(same spec → plan → execute cycle this repo was built with).
+Also planned (see design doc §11–§12), do NOT start these until a slice runs:
+- **Templatize** via `cargo generate` — approach **(B)**: keep concrete names so
+  the repo always builds; generation renames the known strings. (Revisit native
+  `{{placeholder}}` templating, approach (A), only once fully working.)
+- **API schema / typed TS client** (open question, leaning `utoipa` + OpenAPI +
+  `openapi-typescript`/`openapi-fetch`) — its own brainstorm → spec → plan cycle.
+
+When you finish Spec 1, brainstorm + spec + plan the next spec before
+implementing it (same spec → plan → execute cycle this repo was built with).
