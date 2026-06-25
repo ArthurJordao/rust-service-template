@@ -14,7 +14,7 @@ pub struct TokenPair {
 
 /// A bcrypt hash of a throwaway value, used to spend ~the same time hashing on
 /// the "user not found" path as on the real-user path (reduces timing signal).
-const DUMMY_HASH: &str = "$2b$12$C6UzMDM.H6dfI/f/IKcEeO3.9I8H8sJ8q8sJ8q8sJ8q8sJ8q8sJ8";
+const DUMMY_HASH: &str = "$2b$12$/4QYqO7Y4MocBw4DJjzkz.mjUxtYxJBQKbU2bOucWDgyPzKKZWYyC";
 
 /// Add the `admin` scope when the email is in the admin bootstrap list.
 pub fn effective_scopes(
