@@ -8,6 +8,12 @@ pub struct AccessClaims {
     #[serde(default)]
     pub scopes: Vec<String>,
     pub exp: usize,
+    pub iat: usize,
+    pub jti: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(rename = "type", default)]
+    pub token_type: String,
 }
 
 impl AccessClaims {
@@ -26,7 +32,8 @@ impl JwtVerifier {
     /// Build a verifier from an RSA public key in PEM form (RS256).
     pub fn from_rsa_pem(pem: &str) -> anyhow::Result<JwtVerifier> {
         let key = DecodingKey::from_rsa_pem(pem.as_bytes())?;
-        let validation = Validation::new(Algorithm::RS256);
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.validate_aud = false;
         Ok(JwtVerifier { key, validation })
     }
 
@@ -89,6 +96,10 @@ mod tests {
             sub: "user-1".into(),
             scopes: scopes.iter().map(|s| s.to_string()).collect(),
             exp: 9_999_999_999,
+            iat: 0,
+            jti: "test-jti".into(),
+            email: None,
+            token_type: "user".into(),
         }
     }
 

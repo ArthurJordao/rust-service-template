@@ -13,9 +13,36 @@ pub struct DatabaseSettings {
     pub auto_migrate: bool,
 }
 
+fn default_access_ttl() -> i64 {
+    900
+}
+
+fn default_refresh_ttl() -> i64 {
+    7
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthSettings {
     pub jwt_public_key_pem: String,
+    #[serde(default)]
+    pub jwt_private_key_pem: String,
+    #[serde(default = "default_access_ttl")]
+    pub access_token_ttl_seconds: i64,
+    #[serde(default = "default_refresh_ttl")]
+    pub refresh_token_ttl_days: i64,
+    #[serde(default)]
+    pub admin_emails: String,
+}
+
+impl AuthSettings {
+    /// Parse the comma-separated `admin_emails` config value into a trimmed list.
+    pub fn admin_email_list(&self) -> Vec<String> {
+        self.admin_emails
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
 }
 
 fn default_cors() -> Vec<String> {

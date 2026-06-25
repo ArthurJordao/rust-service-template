@@ -40,6 +40,10 @@ mod tests {
             sub: sub.into(),
             scopes: scopes.iter().map(|s| s.to_string()).collect(),
             exp: 9_999_999_999,
+            iat: 0,
+            jti: "test-jti".into(),
+            email: None,
+            token_type: "user".into(),
         }
     }
 
