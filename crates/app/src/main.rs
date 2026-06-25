@@ -22,6 +22,18 @@ async fn main() -> anyhow::Result<()> {
     let (pool, registry, dispatcher_cfg, interval) = state::dispatcher_handle(&res);
     let dispatcher = tokio::spawn(run_dispatcher(pool, registry, dispatcher_cfg, interval));
 
+    let prune_pool = res.pool.clone();
+    let pruner = tokio::spawn(async move {
+        loop {
+            if let Err(e) =
+                domain_auth::ports::revocation::prune_expired_denylist(&prune_pool).await
+            {
+                tracing::error!(error = %e, "denylist prune failed");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        }
+    });
+
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     tracing::info!(port, "HTTP server listening");
     let server = axum::serve(listener, app);
@@ -29,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::select! {
         r = server => { r?; }
         _ = dispatcher => { tracing::error!("dispatcher exited unexpectedly"); }
+        _ = pruner => { tracing::error!("prune task exited unexpectedly"); }
     }
     Ok(())
 }

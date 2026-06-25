@@ -7,8 +7,9 @@ use domain_account::ports::postgres::PostgresAccountRepository;
 use domain_account::AccountState;
 use domain_auth::auth::jwt::JwtIssuer;
 use domain_auth::ports::postgres::PostgresUserRepository;
+use domain_auth::ports::revocation::PostgresRevocationChecker;
 use domain_auth::AuthState;
-use platform::auth::{JwtVerifier, NoopRevocationChecker};
+use platform::auth::{JwtVerifier, RevocationChecker};
 use platform::config::Settings;
 use platform::db::{self, Db};
 use platform::events::{
@@ -26,6 +27,7 @@ pub struct Resources {
     pub issuer: Arc<JwtIssuer>,
     pub admin_emails: Arc<Vec<String>>,
     pub metrics: Metrics,
+    pub revocation: Arc<dyn RevocationChecker>,
 }
 
 /// Static routing table: every (event_type, subscriber_name) pair the system
@@ -59,6 +61,8 @@ pub async fn build_resources(settings: Settings) -> anyhow::Result<Resources> {
     );
     let admin_emails = Arc::new(settings.auth.admin_email_list());
     let metrics = Metrics::new().context("init metrics")?;
+    let revocation: Arc<dyn RevocationChecker> =
+        Arc::new(PostgresRevocationChecker::new(pool.clone()));
 
     // Linear construction (no cycle):
     // 1) publisher depends only on Routes (plain data),
@@ -83,6 +87,7 @@ pub async fn build_resources(settings: Settings) -> anyhow::Result<Resources> {
         issuer,
         admin_emails,
         metrics,
+        revocation,
     })
 }
 
@@ -95,8 +100,7 @@ pub fn auth_state(res: &Resources) -> AuthState {
         publisher: res.publisher.clone(),
         issuer: res.issuer.clone(),
         verifier: res.jwt.clone(),
-        // TODO(2b Task 6): swap to PostgresRevocationChecker
-        revocation: Arc::new(NoopRevocationChecker),
+        revocation: res.revocation.clone(),
         admin_emails: res.admin_emails.clone(),
         metrics: res.metrics.clone(),
     }
@@ -109,8 +113,7 @@ pub fn account_state(res: &Resources) -> AccountState {
         publisher: res.publisher.clone(),
         jwt: res.jwt.clone(),
         metrics: res.metrics.clone(),
-        // TODO(2b Task 6): swap to PostgresRevocationChecker
-        revocation: Arc::new(NoopRevocationChecker),
+        revocation: res.revocation.clone(),
     }
 }
 

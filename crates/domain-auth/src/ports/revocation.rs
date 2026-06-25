@@ -45,3 +45,11 @@ impl RevocationChecker for PostgresRevocationChecker {
         Ok(false)
     }
 }
+
+/// Delete denylist rows whose access tokens have already expired.
+pub async fn prune_expired_denylist(pool: &Db) -> anyhow::Result<u64> {
+    let result = sqlx::query("delete from revoked_access_token where expires_at < now()")
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
