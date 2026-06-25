@@ -25,6 +25,12 @@ See `docs/superpowers/specs/2026-06-24-rust-service-template-design.md`.
 - `crates/domain-*` — one crate per domain (pure rules + ports)
 - `crates/app` — composition root: wires domains, runs server + outbox dispatcher
 
+## Frontend (web SPA)
+
+    make web-install            # install deps (web/)
+    make web-dev                # Vite dev server on :5173 (proxies /api -> :8080)
+    make web-build              # build to web/dist; `make run` then serves it at :8080
+
 ## Add a domain
 
     make new-domain name=billing

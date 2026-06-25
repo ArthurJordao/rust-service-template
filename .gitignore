@@ -5,3 +5,7 @@ Cargo.lock
 
 # Superpowers SDD scratch (briefs, reports, review diffs, ledger)
 .superpowers/
+
+# web SPA
+web/node_modules/
+web/dist/
