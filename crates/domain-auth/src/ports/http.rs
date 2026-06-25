@@ -1,8 +1,9 @@
 use crate::auth::jwt::JwtIssuer;
+use crate::auth::jwt::RefreshClaims;
 use crate::auth::password::hash_password;
 use crate::domain::{check_credentials, effective_scopes};
 use crate::models::{NewUser, User};
-use crate::ports::dto::{AuthTokens, LoginRequest, RegisterRequest};
+use crate::ports::dto::{AuthTokens, LoginRequest, LogoutRequest, RefreshRequest, RegisterRequest};
 use crate::ports::postgres::register_user_with_event;
 use crate::ports::RefreshTokenRepository;
 use crate::ports::UserRepository;
@@ -37,6 +38,8 @@ pub fn router(state: AuthState) -> Router {
         .route("/metrics", get(metrics_handler))
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
+        .route("/auth/refresh", post(refresh))
+        .route("/auth/logout", post(logout))
         .with_state(state)
 }
 
@@ -117,4 +120,76 @@ async fn login(
     let user = check_credentials(found.as_ref(), &body.password)?.clone();
     let tokens = issue_token_pair(&state, &user).await?;
     Ok(Json(tokens))
+}
+
+async fn refresh(
+    State(state): State<AuthState>,
+    Json(body): Json<RefreshRequest>,
+) -> Result<Json<AuthTokens>, AppError> {
+    let claims: RefreshClaims = state.verifier.decode(&body.refresh_token)?;
+    let stored = state
+        .refresh_tokens
+        .find_by_jti(&claims.jti)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::Unauthorized("refresh token not found".into()))?;
+    if stored.revoked {
+        return Err(AppError::Unauthorized("refresh token revoked".into()));
+    }
+    let user = state
+        .users
+        .find_by_id(stored.user_id)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::Unauthorized("user not found".into()))?;
+
+    // Issue a fresh access token; echo the same refresh token (no rotation).
+    let db_scopes = state
+        .users
+        .scope_names(user.id)
+        .await
+        .map_err(AppError::Internal)?;
+    let scopes = effective_scopes(&user.email, db_scopes, &state.admin_emails);
+    let now = chrono::Utc::now();
+    let (access_token, _claims) = state
+        .issuer
+        .issue_access(user.id, &user.email, scopes, now)
+        .map_err(AppError::Internal)?;
+    Ok(Json(AuthTokens {
+        access_token,
+        refresh_token: body.refresh_token,
+        token_type: "Bearer".into(),
+        expires_in: state.issuer.access_ttl_seconds(),
+    }))
+}
+
+async fn logout(
+    State(state): State<AuthState>,
+    Json(body): Json<LogoutRequest>,
+) -> Result<StatusCode, AppError> {
+    // Revoke the refresh token if it parses (idempotent on garbage).
+    if let Ok(claims) = state.verifier.decode::<RefreshClaims>(&body.refresh_token) {
+        state
+            .refresh_tokens
+            .revoke(&claims.jti)
+            .await
+            .map_err(AppError::Internal)?;
+    }
+    // Denylist the access token jti for its remaining lifetime, if supplied + valid.
+    if let Some(at) = body.access_token {
+        if let Ok(claims) = state.verifier.decode::<platform::auth::AccessClaims>(&at) {
+            let expires_at = chrono::DateTime::<chrono::Utc>::from_timestamp(claims.exp as i64, 0)
+                .unwrap_or_else(chrono::Utc::now);
+            sqlx::query(
+                "insert into revoked_access_token (jti, expires_at) values ($1, $2) \
+                 on conflict (jti) do nothing",
+            )
+            .bind(&claims.jti)
+            .bind(expires_at)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?;
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
 }

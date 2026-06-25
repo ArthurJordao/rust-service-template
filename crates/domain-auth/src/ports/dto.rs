@@ -19,3 +19,15 @@ pub struct AuthTokens {
     pub token_type: String,
     pub expires_in: i64,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct RefreshRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LogoutRequest {
+    pub refresh_token: String,
+    #[serde(default)]
+    pub access_token: Option<String>,
+}
