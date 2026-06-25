@@ -62,10 +62,11 @@ async fn dev_register_then_dispatch_creates_account(pool: sqlx::PgPool) {
     let acc = repo.find_by_auth_user_id(77).await.unwrap();
     assert!(acc.is_some(), "account created by event handler");
 
-    let created: i64 =
-        sqlx::query_scalar("select count(*) from outbox_event where event_type = 'account.created'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let created: i64 = sqlx::query_scalar(
+        "select count(*) from outbox_event where event_type = 'account.created'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(created, 1);
 }
