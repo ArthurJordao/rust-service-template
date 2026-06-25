@@ -23,3 +23,7 @@ uuid.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
 http.workspace = true
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+http-body-util = { workspace = true }

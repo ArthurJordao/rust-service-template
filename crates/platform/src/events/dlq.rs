@@ -1,6 +1,6 @@
 use crate::db::Db;
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
 pub struct DeadLetter {
     pub delivery_id: i64,
     pub subscriber_name: String,
