@@ -33,7 +33,9 @@ pub struct SubscriberRegistry {
 
 impl SubscriberRegistry {
     pub fn new() -> Self {
-        SubscriberRegistry { subscribers: Vec::new() }
+        SubscriberRegistry {
+            subscribers: Vec::new(),
+        }
     }
 
     pub fn register(&mut self, s: Arc<dyn Subscriber>) {
@@ -115,7 +117,10 @@ mod tests {
             .add("user.registered", "audit.log");
         assert_eq!(
             routes.names_for("user.registered"),
-            vec!["account.on-user-registered".to_string(), "audit.log".to_string()]
+            vec![
+                "account.on-user-registered".to_string(),
+                "audit.log".to_string()
+            ]
         );
         assert!(routes.names_for("other").is_empty());
     }

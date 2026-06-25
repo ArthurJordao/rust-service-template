@@ -1,5 +1,7 @@
 use crate::db::Db;
 use crate::events::{DeliveredEvent, SubscriberRegistry};
+use std::sync::Arc;
+use std::time::Duration;
 use tracing::Instrument;
 
 pub struct DispatcherConfig {
@@ -9,7 +11,10 @@ pub struct DispatcherConfig {
 
 impl Default for DispatcherConfig {
     fn default() -> Self {
-        DispatcherConfig { max_attempts: 5, batch_size: 50 }
+        DispatcherConfig {
+            max_attempts: 5,
+            batch_size: 50,
+        }
     }
 }
 
@@ -81,8 +86,7 @@ pub async fn dispatch_once(
                 .await?;
             }
             Err(e) => {
-                mark_failure(pool, row.delivery_id, row.attempts, config.max_attempts, &e)
-                    .await?;
+                mark_failure(pool, row.delivery_id, row.attempts, config.max_attempts, &e).await?;
             }
         }
     }
@@ -127,4 +131,22 @@ async fn mark_failure(
         tracing::warn!(delivery_id, attempt = next_attempts, error = %err, "delivery failed; will retry");
     }
     Ok(())
+}
+
+/// Long-running dispatcher: drain due deliveries, sleep, repeat.
+pub async fn run_dispatcher(
+    pool: Db,
+    registry: Arc<SubscriberRegistry>,
+    config: DispatcherConfig,
+    poll_interval: Duration,
+) {
+    tracing::info!("outbox dispatcher started");
+    loop {
+        match dispatch_once(&pool, &registry, &config).await {
+            Ok(n) if n > 0 => tracing::debug!(attempted = n, "dispatched batch"),
+            Ok(_) => {}
+            Err(e) => tracing::error!(error = %e, "dispatch batch failed"),
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
 }

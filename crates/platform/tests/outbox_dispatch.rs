@@ -94,7 +94,10 @@ async fn failing_delivery_dead_letters_after_max_attempts(pool: sqlx::PgPool) {
     tx.commit().await.unwrap();
 
     // max_attempts = 2 so it dead-letters fast; reset next_attempt_at between runs.
-    let config = DispatcherConfig { max_attempts: 2, batch_size: 50 };
+    let config = DispatcherConfig {
+        max_attempts: 2,
+        batch_size: 50,
+    };
 
     dispatch_once(&pool, &reg, &config).await.unwrap(); // attempt 1 -> retry scheduled
     sqlx::query("update outbox_delivery set next_attempt_at = now()")
@@ -103,11 +106,10 @@ async fn failing_delivery_dead_letters_after_max_attempts(pool: sqlx::PgPool) {
         .unwrap();
     dispatch_once(&pool, &reg, &config).await.unwrap(); // attempt 2 -> dead
 
-    let row: (String, i32) =
-        sqlx::query_as("select status, attempts from outbox_delivery limit 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let row: (String, i32) = sqlx::query_as("select status, attempts from outbox_delivery limit 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(row.0, "dead");
     assert_eq!(row.1, 2);
 }
