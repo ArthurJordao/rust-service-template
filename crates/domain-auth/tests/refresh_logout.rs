@@ -115,3 +115,27 @@ async fn logout_then_refresh_is_unauthorized(pool: sqlx::PgPool) {
         .unwrap();
     assert_eq!(refresh.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn access_token_rejected_at_refresh_endpoint(pool: sqlx::PgPool) {
+    // An access token must be rejected by /auth/refresh (wrong token type).
+    let app = router(state(pool));
+    let (at, _rt) = register_and_get_tokens(&app).await;
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/refresh")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"refresh_token":"{at}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "access token must not be accepted at /auth/refresh"
+    );
+}

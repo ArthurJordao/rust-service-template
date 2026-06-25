@@ -20,7 +20,7 @@ use platform::db::Db;
 use platform::events::EventPublisher;
 use platform::metrics::Metrics;
 use platform::observability::CorrelationId;
-use platform::server::{status_handler, AppError};
+use platform::server::AppError;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -51,8 +51,6 @@ impl FromRef<AuthState> for Arc<dyn RevocationChecker> {
 
 pub fn router(state: AuthState) -> Router {
     Router::new()
-        .route("/status", get(status_handler))
-        .route("/metrics", get(metrics_handler))
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh))
@@ -64,10 +62,6 @@ pub fn router(state: AuthState) -> Router {
             get(get_user_scopes).put(set_user_scopes),
         )
         .with_state(state)
-}
-
-async fn metrics_handler(State(state): State<AuthState>) -> String {
-    state.metrics.render()
 }
 
 /// Build access + refresh tokens for a user (refresh persistence arrives in 2b).
@@ -150,6 +144,11 @@ async fn refresh(
     Json(body): Json<RefreshRequest>,
 ) -> Result<Json<AuthTokens>, AppError> {
     let claims: RefreshClaims = state.verifier.decode(&body.refresh_token)?;
+    if claims.token_type != "refresh" {
+        return Err(AppError::Unauthorized(
+            "access token cannot be used as refresh token".into(),
+        ));
+    }
     let stored = state
         .refresh_tokens
         .find_by_jti(&claims.jti)
@@ -190,13 +189,15 @@ async fn logout(
     State(state): State<AuthState>,
     Json(body): Json<LogoutRequest>,
 ) -> Result<StatusCode, AppError> {
-    // Revoke the refresh token if it parses (idempotent on garbage).
+    // Revoke the refresh token if it parses and has the correct type (idempotent on garbage).
     if let Ok(claims) = state.verifier.decode::<RefreshClaims>(&body.refresh_token) {
-        state
-            .refresh_tokens
-            .revoke(&claims.jti)
-            .await
-            .map_err(AppError::Internal)?;
+        if claims.token_type == "refresh" {
+            state
+                .refresh_tokens
+                .revoke(&claims.jti)
+                .await
+                .map_err(AppError::Internal)?;
+        }
     }
     // Denylist the access token jti for its remaining lifetime, if supplied + valid.
     if let Some(at) = body.access_token {

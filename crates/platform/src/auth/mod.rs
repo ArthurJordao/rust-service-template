@@ -93,6 +93,12 @@ where
         let verifier = Arc::<JwtVerifier>::from_ref(state);
         let claims = verifier.verify(token)?;
 
+        if claims.token_type == "refresh" {
+            return Err(AppError::Unauthorized(
+                "refresh token cannot be used as access token".into(),
+            ));
+        }
+
         let checker = Arc::<dyn RevocationChecker>::from_ref(state);
         if checker
             .is_revoked(&claims)
