@@ -7,3 +7,6 @@ version.workspace = true
 platform = { path = "../platform" }
 domain-account = { path = "../domain-account" }
 tokio.workspace = true
+axum.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
