@@ -10,3 +10,12 @@ tokio.workspace = true
 axum.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+domain-account = { path = "../domain-account" }
+platform = { path = "../platform" }
+sqlx.workspace = true
+tower = { workspace = true, features = ["util"] }
+serde_json.workspace = true
+http.workspace = true
+axum.workspace = true
