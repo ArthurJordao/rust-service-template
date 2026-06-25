@@ -14,7 +14,9 @@ impl Default for HttpClient {
 
 impl HttpClient {
     pub fn new() -> HttpClient {
-        HttpClient { inner: reqwest::Client::new() }
+        HttpClient {
+            inner: reqwest::Client::new(),
+        }
     }
 
     pub async fn get_json<T: DeserializeOwned>(

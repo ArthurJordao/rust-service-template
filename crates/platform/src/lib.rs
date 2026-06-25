@@ -6,3 +6,6 @@ pub mod http_client;
 pub mod metrics;
 pub mod observability;
 pub mod server;
+
+pub use config::Settings;
+pub use server::AppError;

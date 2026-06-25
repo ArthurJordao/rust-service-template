@@ -14,7 +14,10 @@ impl Metrics {
             &["method", "path", "status"],
         )?;
         registry.register(Box::new(http_requests.clone()))?;
-        Ok(Metrics { http_requests, registry })
+        Ok(Metrics {
+            http_requests,
+            registry,
+        })
     }
 
     pub fn record_http(&self, method: &str, path: &str, status: u16) {

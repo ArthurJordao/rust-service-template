@@ -27,7 +27,10 @@ impl IntoResponse for AppError {
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             AppError::Internal(e) => {
                 tracing::error!(error = %e, "internal server error");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".to_string(),
+                )
             }
         };
         (status, Json(json!({ "error": message }))).into_response()
@@ -36,10 +39,7 @@ impl IntoResponse for AppError {
 
 /// Build a CORS layer from a list of allowed origins.
 pub fn cors_layer(origins: &[String]) -> CorsLayer {
-    let parsed: Vec<http::HeaderValue> = origins
-        .iter()
-        .filter_map(|o| o.parse().ok())
-        .collect();
+    let parsed: Vec<http::HeaderValue> = origins.iter().filter_map(|o| o.parse().ok()).collect();
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(parsed))
         .allow_methods(tower_http::cors::Any)

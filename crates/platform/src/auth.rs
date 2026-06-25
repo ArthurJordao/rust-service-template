@@ -41,7 +41,9 @@ pub fn require_scope(claims: &AccessClaims, scope: &str) -> Result<(), AppError>
     if claims.has_scope(scope) {
         Ok(())
     } else {
-        Err(AppError::Forbidden(format!("missing required scope: {scope}")))
+        Err(AppError::Forbidden(format!(
+            "missing required scope: {scope}"
+        )))
     }
 }
 

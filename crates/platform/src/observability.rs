@@ -18,7 +18,12 @@ pub fn init_tracing(env_filter: &str) {
     let filter = EnvFilter::try_new(env_filter).unwrap_or_else(|_| EnvFilter::new("info"));
     let _ = tracing_subscriber::registry()
         .with(filter)
-        .with(fmt::layer().json().with_current_span(true).with_span_list(false))
+        .with(
+            fmt::layer()
+                .json()
+                .with_current_span(true)
+                .with_span_list(false),
+        )
         .try_init();
 }
 

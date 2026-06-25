@@ -67,6 +67,9 @@ mod tests {
         assert_eq!(s.server.port, 9999);
         assert_eq!(s.database.max_connections, 3);
         assert!(s.database.auto_migrate);
-        assert_eq!(s.cors_allowed_origins, vec!["http://localhost:5173".to_string()]);
+        assert_eq!(
+            s.cors_allowed_origins,
+            vec!["http://localhost:5173".to_string()]
+        );
     }
 }
