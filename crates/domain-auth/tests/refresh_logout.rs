@@ -66,6 +66,18 @@ async fn refresh_returns_new_access_token(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["refresh_token"].as_str().unwrap(),
+        rt,
+        "refresh token must NOT rotate"
+    );
+    assert!(
+        json["access_token"].as_str().unwrap().len() > 10,
+        "a fresh access token is issued"
+    );
 }
 
 #[sqlx::test(migrations = "../../migrations")]
