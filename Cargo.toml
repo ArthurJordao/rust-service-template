@@ -26,4 +26,5 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 http = "1"
+http-body-util = "0.1"
 bcrypt = "0.16"
