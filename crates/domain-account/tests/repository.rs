@@ -11,7 +11,11 @@ async fn create_inserts_account_and_emits_event(pool: sqlx::PgPool) {
     let acc = create_account_with_event(
         &pool,
         &publisher,
-        NewAccount { email: "a@b.c".into(), name: "A".into(), auth_user_id: 42 },
+        NewAccount {
+            email: "a@b.c".into(),
+            name: "A".into(),
+            auth_user_id: 42,
+        },
         "cid-1",
     )
     .await
@@ -36,7 +40,11 @@ async fn create_inserts_account_and_emits_event(pool: sqlx::PgPool) {
     let again = create_account_with_event(
         &pool,
         &publisher,
-        NewAccount { email: "a@b.c".into(), name: "A".into(), auth_user_id: 42 },
+        NewAccount {
+            email: "a@b.c".into(),
+            name: "A".into(),
+            auth_user_id: 42,
+        },
         "cid-2",
     )
     .await

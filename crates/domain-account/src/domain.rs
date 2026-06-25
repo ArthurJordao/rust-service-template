@@ -7,15 +7,16 @@ pub fn can_access(claims: &AccessClaims, account: &Account) -> bool {
     if claims.has_scope("admin") {
         return true;
     }
-    claims.has_scope("read:accounts:own")
-        && claims.sub == format!("user-{}", account.auth_user_id)
+    claims.has_scope("read:accounts:own") && claims.sub == format!("user-{}", account.auth_user_id)
 }
 
 pub fn authorize(claims: &AccessClaims, account: &Account) -> Result<(), AppError> {
     if can_access(claims, account) {
         Ok(())
     } else {
-        Err(AppError::Forbidden("not allowed to access this account".into()))
+        Err(AppError::Forbidden(
+            "not allowed to access this account".into(),
+        ))
     }
 }
 
@@ -49,12 +50,18 @@ mod tests {
 
     #[test]
     fn owner_with_scope_can_access_own_account() {
-        assert!(can_access(&claims("user-7", &["read:accounts:own"]), &account(7)));
+        assert!(can_access(
+            &claims("user-7", &["read:accounts:own"]),
+            &account(7)
+        ));
     }
 
     #[test]
     fn non_owner_without_admin_cannot_access() {
-        assert!(!can_access(&claims("user-8", &["read:accounts:own"]), &account(7)));
+        assert!(!can_access(
+            &claims("user-8", &["read:accounts:own"]),
+            &account(7)
+        ));
     }
 
     #[test]

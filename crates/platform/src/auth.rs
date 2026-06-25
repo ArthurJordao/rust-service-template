@@ -47,6 +47,39 @@ pub fn require_scope(claims: &AccessClaims, scope: &str) -> Result<(), AppError>
     }
 }
 
+use axum::extract::{FromRef, FromRequestParts};
+use std::sync::Arc;
+
+/// Extractor that verifies a Bearer token and yields its claims.
+/// Works with any axum state from which `Arc<JwtVerifier>` can be borrowed.
+pub struct Authenticated(pub AccessClaims);
+
+#[async_trait::async_trait]
+impl<S> FromRequestParts<S> for Authenticated
+where
+    Arc<JwtVerifier>: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let header = parts
+            .headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| AppError::Unauthorized("missing Authorization header".into()))?;
+        let token = header
+            .strip_prefix("Bearer ")
+            .ok_or_else(|| AppError::Unauthorized("expected Bearer token".into()))?;
+        let verifier = Arc::<JwtVerifier>::from_ref(state);
+        let claims = verifier.verify(token)?;
+        Ok(Authenticated(claims))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

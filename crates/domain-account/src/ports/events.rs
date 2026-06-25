@@ -24,7 +24,11 @@ impl AccountSubscriber {
         repo: Arc<dyn AccountRepository>,
         publisher: Arc<dyn EventPublisher>,
     ) -> AccountSubscriber {
-        AccountSubscriber { pool, repo, publisher }
+        AccountSubscriber {
+            pool,
+            repo,
+            publisher,
+        }
     }
 }
 
@@ -46,7 +50,10 @@ impl Subscriber for AccountSubscriber {
             .await?
             .is_some()
         {
-            tracing::info!(uid = payload.auth_user_id, "account already exists; skipping");
+            tracing::info!(
+                uid = payload.auth_user_id,
+                "account already exists; skipping"
+            );
             return Ok(());
         }
 
