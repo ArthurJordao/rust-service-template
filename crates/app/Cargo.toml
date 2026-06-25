@@ -14,9 +14,11 @@ anyhow.workspace = true
 
 [dev-dependencies]
 domain-account = { path = "../domain-account" }
+domain-auth = { path = "../domain-auth" }
 platform = { path = "../platform" }
 sqlx.workspace = true
 tower = { workspace = true, features = ["util"] }
 serde_json.workspace = true
 http.workspace = true
 axum.workspace = true
+http-body-util = { workspace = true }
