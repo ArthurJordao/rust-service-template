@@ -94,6 +94,59 @@ impl RefreshTokenRepository for PostgresUserRepository {
     }
 }
 
+use crate::models::ScopeRow;
+use crate::ports::repository::ScopeRepository;
+
+#[async_trait::async_trait]
+impl ScopeRepository for PostgresUserRepository {
+    async fn list_catalog(&self) -> anyhow::Result<Vec<ScopeRow>> {
+        let rows =
+            sqlx::query_as::<_, ScopeRow>("select id, name, description from scope order by name")
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows)
+    }
+
+    async fn list_users_with_scopes(&self) -> anyhow::Result<Vec<(User, Vec<String>)>> {
+        let users =
+            sqlx::query_as::<_, User>(&format!("select {USER_COLS} from auth_user order by id"))
+                .fetch_all(&self.pool)
+                .await?;
+        let mut out = Vec::with_capacity(users.len());
+        for user in users {
+            let scopes: Vec<(String,)> =
+                sqlx::query_as("select scope from user_scope where user_id = $1 order by scope")
+                    .bind(user.id)
+                    .fetch_all(&self.pool)
+                    .await?;
+            out.push((user, scopes.into_iter().map(|(s,)| s).collect()));
+        }
+        Ok(out)
+    }
+
+    async fn replace_user_scopes(&self, user_id: i64, scopes: &[String]) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("delete from user_scope where user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        for scope in scopes {
+            sqlx::query("insert into user_scope (user_id, scope) values ($1, $2)")
+                .bind(user_id)
+                .bind(scope)
+                .execute(&mut *tx)
+                .await?;
+        }
+        // Invalidate the user's existing access tokens (per-user revocation epoch).
+        sqlx::query("update auth_user set tokens_valid_from = now() where id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
 /// Insert a user, seed default scopes, and publish `user.registered` atomically.
 pub async fn register_user_with_event(
     pool: &Db,

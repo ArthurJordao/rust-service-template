@@ -1,4 +1,4 @@
-use crate::models::User;
+use crate::models::{ScopeRow, User};
 use chrono::{DateTime, Utc};
 
 #[async_trait::async_trait]
@@ -16,6 +16,13 @@ pub struct StoredRefreshToken {
     pub user_id: i64,
     pub expires_at: DateTime<Utc>,
     pub revoked: bool,
+}
+
+#[async_trait::async_trait]
+pub trait ScopeRepository: Send + Sync {
+    async fn list_catalog(&self) -> anyhow::Result<Vec<ScopeRow>>;
+    async fn list_users_with_scopes(&self) -> anyhow::Result<Vec<(User, Vec<String>)>>;
+    async fn replace_user_scopes(&self, user_id: i64, scopes: &[String]) -> anyhow::Result<()>;
 }
 
 #[async_trait::async_trait]
