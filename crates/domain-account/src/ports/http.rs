@@ -1,4 +1,4 @@
-use crate::domain::authorize;
+use crate::domain::{auth_user_id_from_sub, authorize};
 use crate::models::Account;
 use crate::ports::AccountRepository;
 use axum::extract::{FromRef, Path, State};
@@ -37,6 +37,7 @@ pub fn router(state: AccountState) -> Router {
     Router::new()
         .route("/status", get(status_handler))
         .route("/accounts", get(list_accounts))
+        .route("/accounts/me", get(account_me))
         .route("/accounts/:id", get(get_account))
         .route("/metrics", get(metrics_handler))
         .with_state(state)
@@ -59,6 +60,21 @@ async fn get_account(
         .map_err(AppError::Internal)?
         .ok_or_else(|| AppError::NotFound("account not found".into()))?;
     authorize(&claims, &account)?;
+    Ok(Json(account))
+}
+
+async fn account_me(
+    State(state): State<AccountState>,
+    Authenticated(claims): Authenticated,
+) -> Result<Json<Account>, AppError> {
+    let uid = auth_user_id_from_sub(&claims.sub)
+        .ok_or_else(|| AppError::Unauthorized("invalid subject".into()))?;
+    let account = state
+        .repo
+        .find_by_auth_user_id(uid)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::NotFound("no account for this user".into()))?;
     Ok(Json(account))
 }
 

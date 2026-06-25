@@ -2,6 +2,12 @@ use crate::models::Account;
 use platform::auth::AccessClaims;
 use platform::server::AppError;
 
+/// Parse an access-token subject of the form `user-{id}` into the auth user id.
+pub fn auth_user_id_from_sub(sub: &str) -> Option<i64> {
+    sub.strip_prefix("user-")
+        .and_then(|s| s.parse::<i64>().ok())
+}
+
 /// Owner-or-admin policy (mirrors the Haskell AccessPolicy for Account).
 pub fn can_access(claims: &AccessClaims, account: &Account) -> bool {
     if claims.has_scope("admin") {
@@ -71,5 +77,14 @@ mod tests {
     #[test]
     fn owner_without_scope_cannot_access() {
         assert!(!can_access(&claims("user-7", &[]), &account(7)));
+    }
+
+    #[test]
+    fn auth_user_id_from_sub_parses_user_prefix() {
+        assert_eq!(auth_user_id_from_sub("user-42"), Some(42));
+        assert_eq!(auth_user_id_from_sub("user-0"), Some(0));
+        assert_eq!(auth_user_id_from_sub("service-x"), None);
+        assert_eq!(auth_user_id_from_sub("user-"), None);
+        assert_eq!(auth_user_id_from_sub("42"), None);
     }
 }
