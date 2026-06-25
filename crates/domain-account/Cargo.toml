@@ -1,0 +1,7 @@
+[package]
+name = "domain-account"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+platform = { path = "../platform" }

@@ -1,0 +1,9 @@
+[package]
+name = "app"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+platform = { path = "../platform" }
+domain-account = { path = "../domain-account" }
+tokio.workspace = true
