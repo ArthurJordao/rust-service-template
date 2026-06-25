@@ -1,9 +1,7 @@
-mod state;
-
+use app::state;
 use platform::config::Settings;
 use platform::events::run_dispatcher;
-use platform::observability::{correlation_id_middleware, init_tracing};
-use platform::server::cors_layer;
+use platform::observability::init_tracing;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -12,12 +10,18 @@ async fn main() -> anyhow::Result<()> {
 
     let res = state::build_resources(settings).await?;
     let port = res.settings.server.port;
-    let cors = cors_layer(&res.settings.cors_allowed_origins);
 
-    let app = domain_account::router(state::account_state(&res))
-        .merge(domain_auth::router(state::auth_state(&res)))
-        .layer(axum::middleware::from_fn(correlation_id_middleware))
-        .layer(cors);
+    let web_dist = std::path::Path::new("web/dist");
+    let web_dist = web_dist.exists().then(|| web_dist.to_path_buf());
+
+    let app = state::build_router(
+        state::account_state(&res),
+        state::auth_state(&res),
+        state::dlq_state(&res),
+        res.metrics.clone(),
+        &res.settings.cors_allowed_origins,
+        web_dist,
+    );
 
     let (pool, registry, dispatcher_cfg, interval) = state::dispatcher_handle(&res);
     let dispatcher = tokio::spawn(run_dispatcher(pool, registry, dispatcher_cfg, interval));

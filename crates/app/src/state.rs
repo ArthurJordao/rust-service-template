@@ -1,7 +1,10 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use axum::routing::get;
+use axum::Router;
 use domain_account::ports::events::AccountSubscriber;
 use domain_account::ports::postgres::PostgresAccountRepository;
 use domain_account::AccountState;
@@ -13,9 +16,13 @@ use platform::auth::{JwtVerifier, RevocationChecker};
 use platform::config::Settings;
 use platform::db::{self, Db};
 use platform::events::{
+    dlq_http::{dlq_router, DlqState},
     DispatcherConfig, EventPublisher, OutboxPublisher, Routes, SubscriberRegistry,
 };
 use platform::metrics::Metrics;
+use platform::observability::correlation_id_middleware;
+use platform::server::{cors_layer, status_handler};
+use tower_http::services::{ServeDir, ServeFile};
 
 /// All shared resources, constructed once at startup.
 pub struct Resources {
@@ -127,4 +134,47 @@ pub fn dispatcher_handle(
         DispatcherConfig::default(),
         Duration::from_secs(2),
     )
+}
+
+pub fn dlq_state(res: &Resources) -> DlqState {
+    DlqState {
+        pool: res.pool.clone(),
+        jwt: res.jwt.clone(),
+        revocation: res.revocation.clone(),
+    }
+}
+
+/// Assemble the full application router: API under `/api`, infra at root, and an
+/// optional static SPA fallback. Pure (no I/O) so it is unit-testable.
+pub fn build_router(
+    account: AccountState,
+    auth: AuthState,
+    dlq: DlqState,
+    metrics: Metrics,
+    cors_origins: &[String],
+    web_dist: Option<PathBuf>,
+) -> Router {
+    let api = domain_account::router(account)
+        .merge(domain_auth::router(auth))
+        .merge(dlq_router(dlq));
+
+    let metrics_for_handler = metrics.clone();
+    let mut app = Router::new()
+        .route("/status", get(status_handler))
+        .route(
+            "/metrics",
+            get(move || {
+                let m = metrics_for_handler.clone();
+                async move { m.render() }
+            }),
+        )
+        .nest("/api", api);
+
+    if let Some(dir) = web_dist {
+        let index = dir.join("index.html");
+        app = app.fallback_service(ServeDir::new(dir).not_found_service(ServeFile::new(index)));
+    }
+
+    app.layer(axum::middleware::from_fn(correlation_id_middleware))
+        .layer(cors_layer(cors_origins))
 }

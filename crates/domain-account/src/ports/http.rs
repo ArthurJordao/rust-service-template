@@ -8,7 +8,7 @@ use platform::auth::{require_scope, Authenticated, JwtVerifier, RevocationChecke
 use platform::db::Db;
 use platform::events::EventPublisher;
 use platform::metrics::Metrics;
-use platform::server::{status_handler, AppError};
+use platform::server::AppError;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -35,11 +35,9 @@ impl FromRef<AccountState> for Arc<dyn RevocationChecker> {
 
 pub fn router(state: AccountState) -> Router {
     Router::new()
-        .route("/status", get(status_handler))
         .route("/accounts", get(list_accounts))
         .route("/accounts/me", get(account_me))
         .route("/accounts/:id", get(get_account))
-        .route("/metrics", get(metrics_handler))
         .with_state(state)
 }
 
@@ -80,8 +78,4 @@ async fn account_me(
         .map_err(AppError::Internal)?
         .ok_or_else(|| AppError::NotFound("no account for this user".into()))?;
     Ok(Json(account))
-}
-
-async fn metrics_handler(State(state): State<AccountState>) -> String {
-    state.metrics.render()
 }

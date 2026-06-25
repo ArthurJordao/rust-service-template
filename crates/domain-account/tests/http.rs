@@ -24,21 +24,6 @@ fn state(pool: sqlx::PgPool) -> AccountState {
 }
 
 #[sqlx::test(migrations = "../../migrations")]
-async fn status_returns_ok(pool: sqlx::PgPool) {
-    let app = router(state(pool));
-    let res = app
-        .oneshot(
-            Request::builder()
-                .uri("/status")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-}
-
-#[sqlx::test(migrations = "../../migrations")]
 async fn get_account_without_token_is_unauthorized(pool: sqlx::PgPool) {
     let app = router(state(pool));
     let res = app
