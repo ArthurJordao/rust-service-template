@@ -67,3 +67,18 @@ async fn account_me_without_token_is_unauthorized(pool: sqlx::PgPool) {
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn list_accounts_without_token_is_unauthorized(pool: sqlx::PgPool) {
+    let app = router(state(pool));
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/accounts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}

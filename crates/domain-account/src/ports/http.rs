@@ -4,7 +4,7 @@ use crate::ports::AccountRepository;
 use axum::extract::{FromRef, Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use platform::auth::{Authenticated, JwtVerifier, RevocationChecker};
+use platform::auth::{require_scope, Authenticated, JwtVerifier, RevocationChecker};
 use platform::db::Db;
 use platform::events::EventPublisher;
 use platform::metrics::Metrics;
@@ -43,7 +43,11 @@ pub fn router(state: AccountState) -> Router {
         .with_state(state)
 }
 
-async fn list_accounts(State(state): State<AccountState>) -> Result<Json<Vec<Account>>, AppError> {
+async fn list_accounts(
+    State(state): State<AccountState>,
+    Authenticated(claims): Authenticated,
+) -> Result<Json<Vec<Account>>, AppError> {
+    require_scope(&claims, "admin")?;
     let accounts = state.repo.list().await.map_err(AppError::Internal)?;
     Ok(Json(accounts))
 }
