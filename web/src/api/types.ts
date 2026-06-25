@@ -12,3 +12,22 @@ export interface Account {
   created_at: string;
   created_by_cid: string;
 }
+export interface UserWithScopes {
+  id: number;
+  email: string;
+  scopes: string[];
+}
+export interface ScopeInfo {
+  id: number;
+  name: string;
+  description: string;
+}
+export interface DeadLetter {
+  delivery_id: number;
+  subscriber_name: string;
+  event_type: string;
+  aggregate_id: string;
+  payload: unknown;
+  last_error: string | null;
+  attempts: number;
+}
