@@ -20,6 +20,8 @@ transactional outbox, correlation-id tracing, JWT auth, and Prometheus metrics.
 See `docs/superpowers/specs/2026-06-24-rust-service-template-design.md`.
 
 - `crates/platform` — cross-cutting: config, db, events (outbox), auth, metrics, http client, observability
+- `crates/domain-auth` — register/login/refresh/logout, RS256 JWTs, **Postgres-backed**
+  token revocation (no Redis), admin scope management
 - `crates/domain-*` — one crate per domain (pure rules + ports)
 - `crates/app` — composition root: wires domains, runs server + outbox dispatcher
 
