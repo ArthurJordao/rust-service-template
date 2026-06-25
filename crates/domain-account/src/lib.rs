@@ -1,1 +1,4 @@
-//! Account domain. Implemented in Plan 1c.
+//! Account domain: pure rules + ports + HTTP/event adapters.
+pub mod domain;
+pub mod models;
+pub mod ports;
