@@ -6,6 +6,7 @@ version.workspace = true
 [dependencies]
 platform = { path = "../platform" }
 domain-account = { path = "../domain-account" }
+domain-auth = { path = "../domain-auth" }
 tokio.workspace = true
 axum.workspace = true
 tracing.workspace = true

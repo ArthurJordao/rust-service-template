@@ -2,16 +2,13 @@ use crate::domain::authorize;
 use crate::models::Account;
 use crate::ports::AccountRepository;
 use axum::extract::{FromRef, Path, State};
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::{Json, Router};
-use http::StatusCode;
 use platform::auth::{Authenticated, JwtVerifier};
 use platform::db::Db;
-use platform::events::{EventPublisher, NewEvent};
+use platform::events::EventPublisher;
 use platform::metrics::Metrics;
-use platform::observability::CorrelationId;
 use platform::server::{status_handler, AppError};
-use serde::Deserialize;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -35,7 +32,6 @@ pub fn router(state: AccountState) -> Router {
         .route("/accounts", get(list_accounts))
         .route("/accounts/:id", get(get_account))
         .route("/metrics", get(metrics_handler))
-        .route("/dev/register", post(dev_register))
         .with_state(state)
 }
 
@@ -61,44 +57,4 @@ async fn get_account(
 
 async fn metrics_handler(State(state): State<AccountState>) -> String {
     state.metrics.render()
-}
-
-#[derive(Deserialize)]
-struct DevRegister {
-    auth_user_id: i64,
-    email: String,
-}
-
-/// DEV-ONLY: publish a `user.registered` event to exercise the outbox loop.
-/// Replaced by the real auth domain in Spec 2.
-async fn dev_register(
-    State(state): State<AccountState>,
-    CorrelationId(cid): CorrelationId,
-    Json(body): Json<DevRegister>,
-) -> Result<StatusCode, AppError> {
-    let mut tx = state
-        .pool
-        .begin()
-        .await
-        .map_err(|e| AppError::Internal(e.into()))?;
-    state
-        .publisher
-        .publish(
-            &mut tx,
-            NewEvent {
-                event_type: "user.registered".into(),
-                aggregate_id: body.auth_user_id.to_string(),
-                payload: serde_json::json!({
-                    "auth_user_id": body.auth_user_id,
-                    "email": body.email,
-                }),
-                correlation_id: cid,
-            },
-        )
-        .await
-        .map_err(AppError::Internal)?;
-    tx.commit()
-        .await
-        .map_err(|e| AppError::Internal(e.into()))?;
-    Ok(StatusCode::ACCEPTED)
 }

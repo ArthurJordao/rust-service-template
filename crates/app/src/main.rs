@@ -15,6 +15,7 @@ async fn main() -> anyhow::Result<()> {
     let cors = cors_layer(&res.settings.cors_allowed_origins);
 
     let app = domain_account::router(state::account_state(&res))
+        .merge(domain_auth::router(state::auth_state(&res)))
         .layer(axum::middleware::from_fn(correlation_id_middleware))
         .layer(cors);
 

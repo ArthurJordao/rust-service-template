@@ -5,6 +5,9 @@ use anyhow::Context;
 use domain_account::ports::events::AccountSubscriber;
 use domain_account::ports::postgres::PostgresAccountRepository;
 use domain_account::AccountState;
+use domain_auth::auth::jwt::JwtIssuer;
+use domain_auth::ports::postgres::PostgresUserRepository;
+use domain_auth::AuthState;
 use platform::auth::JwtVerifier;
 use platform::config::Settings;
 use platform::db::{self, Db};
@@ -20,6 +23,8 @@ pub struct Resources {
     pub registry: Arc<SubscriberRegistry>,
     pub publisher: Arc<dyn EventPublisher>,
     pub jwt: Arc<JwtVerifier>,
+    pub issuer: Arc<JwtIssuer>,
+    pub admin_emails: Arc<Vec<String>>,
     pub metrics: Metrics,
 }
 
@@ -44,6 +49,15 @@ pub async fn build_resources(settings: Settings) -> anyhow::Result<Resources> {
         JwtVerifier::from_rsa_pem(&settings.auth.jwt_public_key_pem)
             .context("parse JWT public key")?,
     );
+    let issuer = Arc::new(
+        JwtIssuer::from_rsa_pem(
+            &settings.auth.jwt_private_key_pem,
+            settings.auth.access_token_ttl_seconds,
+            settings.auth.refresh_token_ttl_days,
+        )
+        .context("parse JWT private key")?,
+    );
+    let admin_emails = Arc::new(settings.auth.admin_email_list());
     let metrics = Metrics::new().context("init metrics")?;
 
     // Linear construction (no cycle):
@@ -66,8 +80,21 @@ pub async fn build_resources(settings: Settings) -> anyhow::Result<Resources> {
         registry,
         publisher,
         jwt,
+        issuer,
+        admin_emails,
         metrics,
     })
+}
+
+pub fn auth_state(res: &Resources) -> AuthState {
+    AuthState {
+        pool: res.pool.clone(),
+        users: Arc::new(PostgresUserRepository::new(res.pool.clone())),
+        publisher: res.publisher.clone(),
+        issuer: res.issuer.clone(),
+        admin_emails: res.admin_emails.clone(),
+        metrics: res.metrics.clone(),
+    }
 }
 
 pub fn account_state(res: &Resources) -> AccountState {
