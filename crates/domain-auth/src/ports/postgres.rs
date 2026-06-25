@@ -55,6 +55,45 @@ impl UserRepository for PostgresUserRepository {
     }
 }
 
+use crate::ports::repository::{RefreshTokenRepository, StoredRefreshToken};
+use chrono::{DateTime, Utc};
+
+#[async_trait::async_trait]
+impl RefreshTokenRepository for PostgresUserRepository {
+    async fn store(
+        &self,
+        jti: &str,
+        user_id: i64,
+        expires_at: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query("insert into refresh_token (jti, user_id, expires_at) values ($1, $2, $3)")
+            .bind(jti)
+            .bind(user_id)
+            .bind(expires_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn find_by_jti(&self, jti: &str) -> anyhow::Result<Option<StoredRefreshToken>> {
+        let row = sqlx::query_as::<_, StoredRefreshToken>(
+            "select id, jti, user_id, expires_at, revoked from refresh_token where jti = $1",
+        )
+        .bind(jti)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    async fn revoke(&self, jti: &str) -> anyhow::Result<()> {
+        sqlx::query("update refresh_token set revoked = true where jti = $1")
+            .bind(jti)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
 /// Insert a user, seed default scopes, and publish `user.registered` atomically.
 pub async fn register_user_with_event(
     pool: &Db,
