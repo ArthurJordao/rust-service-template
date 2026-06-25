@@ -18,6 +18,7 @@ fn state(pool: sqlx::PgPool) -> AuthState {
         pool: pool.clone(),
         users: repo.clone(),
         refresh_tokens: repo.clone(),
+        scopes: repo.clone(),
         publisher: Arc::new(OutboxPublisher::new(Routes::new())),
         issuer: Arc::new(JwtIssuer::from_rsa_pem(TEST_PRIV_PEM, 900, 7).unwrap()),
         verifier: Arc::new(platform::auth::JwtVerifier::from_rsa_pem(TEST_PUB_PEM).unwrap()),

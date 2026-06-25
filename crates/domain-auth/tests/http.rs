@@ -18,6 +18,7 @@ fn state(pool: sqlx::PgPool) -> AuthState {
         pool: pool.clone(),
         users: repo.clone(),
         refresh_tokens: repo.clone(),
+        scopes: repo.clone(),
         publisher: Arc::new(OutboxPublisher::new(
             Routes::new().add("user.registered", "account.on-user-registered"),
         )),

@@ -97,6 +97,7 @@ pub fn auth_state(res: &Resources) -> AuthState {
         pool: res.pool.clone(),
         users: repo.clone(),
         refresh_tokens: repo.clone(),
+        scopes: repo.clone(),
         publisher: res.publisher.clone(),
         issuer: res.issuer.clone(),
         verifier: res.jwt.clone(),

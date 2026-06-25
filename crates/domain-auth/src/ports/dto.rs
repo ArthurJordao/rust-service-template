@@ -31,3 +31,15 @@ pub struct LogoutRequest {
     #[serde(default)]
     pub access_token: Option<String>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct UserWithScopes {
+    pub id: i64,
+    pub email: String,
+    pub scopes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetScopesRequest {
+    pub scopes: Vec<String>,
+}

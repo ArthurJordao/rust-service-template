@@ -3,15 +3,19 @@ use crate::auth::jwt::RefreshClaims;
 use crate::auth::password::hash_password;
 use crate::domain::{check_credentials, effective_scopes};
 use crate::models::{NewUser, User};
-use crate::ports::dto::{AuthTokens, LoginRequest, LogoutRequest, RefreshRequest, RegisterRequest};
+use crate::ports::dto::{
+    AuthTokens, LoginRequest, LogoutRequest, RefreshRequest, RegisterRequest, SetScopesRequest,
+    UserWithScopes,
+};
 use crate::ports::postgres::register_user_with_event;
 use crate::ports::RefreshTokenRepository;
+use crate::ports::ScopeRepository;
 use crate::ports::UserRepository;
-use axum::extract::State;
+use axum::extract::{FromRef, Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use http::StatusCode;
-use platform::auth::{JwtVerifier, RevocationChecker};
+use platform::auth::{require_scope, Authenticated, JwtVerifier, RevocationChecker};
 use platform::db::Db;
 use platform::events::EventPublisher;
 use platform::metrics::Metrics;
@@ -24,12 +28,25 @@ pub struct AuthState {
     pub pool: Db,
     pub users: Arc<dyn UserRepository>,
     pub refresh_tokens: Arc<dyn RefreshTokenRepository>,
+    pub scopes: Arc<dyn ScopeRepository>,
     pub publisher: Arc<dyn EventPublisher>,
     pub issuer: Arc<JwtIssuer>,
     pub verifier: Arc<JwtVerifier>,
     pub revocation: Arc<dyn RevocationChecker>,
     pub admin_emails: Arc<Vec<String>>,
     pub metrics: Metrics,
+}
+
+impl FromRef<AuthState> for Arc<JwtVerifier> {
+    fn from_ref(state: &AuthState) -> Self {
+        state.verifier.clone()
+    }
+}
+
+impl FromRef<AuthState> for Arc<dyn RevocationChecker> {
+    fn from_ref(state: &AuthState) -> Self {
+        state.revocation.clone()
+    }
 }
 
 pub fn router(state: AuthState) -> Router {
@@ -40,6 +57,12 @@ pub fn router(state: AuthState) -> Router {
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh))
         .route("/auth/logout", post(logout))
+        .route("/scopes", get(list_scopes))
+        .route("/users", get(list_users))
+        .route(
+            "/users/:id/scopes",
+            get(get_user_scopes).put(set_user_scopes),
+        )
         .with_state(state)
 }
 
@@ -191,5 +214,68 @@ async fn logout(
             .map_err(|e| AppError::Internal(e.into()))?;
         }
     }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_scopes(
+    State(state): State<AuthState>,
+    Authenticated(claims): Authenticated,
+) -> Result<Json<Vec<crate::models::ScopeRow>>, AppError> {
+    require_scope(&claims, "admin")?;
+    let catalog = state
+        .scopes
+        .list_catalog()
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(catalog))
+}
+
+async fn list_users(
+    State(state): State<AuthState>,
+    Authenticated(claims): Authenticated,
+) -> Result<Json<Vec<UserWithScopes>>, AppError> {
+    require_scope(&claims, "admin")?;
+    let rows = state
+        .scopes
+        .list_users_with_scopes()
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|(u, scopes)| UserWithScopes {
+                id: u.id,
+                email: u.email,
+                scopes,
+            })
+            .collect(),
+    ))
+}
+
+async fn get_user_scopes(
+    State(state): State<AuthState>,
+    Authenticated(claims): Authenticated,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<String>>, AppError> {
+    require_scope(&claims, "admin")?;
+    let scopes = state
+        .users
+        .scope_names(id)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(scopes))
+}
+
+async fn set_user_scopes(
+    State(state): State<AuthState>,
+    Authenticated(claims): Authenticated,
+    Path(id): Path<i64>,
+    Json(body): Json<SetScopesRequest>,
+) -> Result<StatusCode, AppError> {
+    require_scope(&claims, "admin")?;
+    state
+        .scopes
+        .replace_user_scopes(id, &body.scopes)
+        .await
+        .map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }

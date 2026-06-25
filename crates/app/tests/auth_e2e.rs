@@ -35,6 +35,7 @@ async fn register_then_dispatch_creates_account(pool: sqlx::PgPool) {
         pool: pool.clone(),
         users: auth_repo.clone(),
         refresh_tokens: auth_repo.clone(),
+        scopes: auth_repo.clone(),
         publisher: publisher.clone(),
         issuer: Arc::new(JwtIssuer::from_rsa_pem(TEST_PRIV_PEM, 900, 7).unwrap()),
         verifier: Arc::new(platform::auth::JwtVerifier::from_rsa_pem(TEST_PUB_PEM).unwrap()),
