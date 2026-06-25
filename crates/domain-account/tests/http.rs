@@ -2,7 +2,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use domain_account::ports::http::{router, AccountState};
 use domain_account::ports::postgres::PostgresAccountRepository;
-use platform::auth::JwtVerifier;
+use platform::auth::{JwtVerifier, NoopRevocationChecker};
 use platform::events::{OutboxPublisher, Routes};
 use platform::metrics::Metrics;
 use std::sync::Arc;
@@ -19,6 +19,7 @@ fn state(pool: sqlx::PgPool) -> AccountState {
         publisher: Arc::new(OutboxPublisher::new(Routes::new())),
         jwt: Arc::new(JwtVerifier::from_rsa_pem(TEST_PUB_PEM).unwrap()),
         metrics: Metrics::new().unwrap(),
+        revocation: Arc::new(NoopRevocationChecker),
     }
 }
 

@@ -4,7 +4,7 @@ use crate::ports::AccountRepository;
 use axum::extract::{FromRef, Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use platform::auth::{Authenticated, JwtVerifier};
+use platform::auth::{Authenticated, JwtVerifier, RevocationChecker};
 use platform::db::Db;
 use platform::events::EventPublisher;
 use platform::metrics::Metrics;
@@ -18,11 +18,18 @@ pub struct AccountState {
     pub publisher: Arc<dyn EventPublisher>,
     pub jwt: Arc<JwtVerifier>,
     pub metrics: Metrics,
+    pub revocation: Arc<dyn RevocationChecker>,
 }
 
 impl FromRef<AccountState> for Arc<JwtVerifier> {
     fn from_ref(state: &AccountState) -> Self {
         state.jwt.clone()
+    }
+}
+
+impl FromRef<AccountState> for Arc<dyn RevocationChecker> {
+    fn from_ref(state: &AccountState) -> Self {
+        state.revocation.clone()
     }
 }
 

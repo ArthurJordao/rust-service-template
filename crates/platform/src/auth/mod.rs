@@ -1,3 +1,6 @@
+mod revocation;
+pub use revocation::{NoopRevocationChecker, RevocationChecker};
+
 use crate::server::AppError;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
@@ -38,7 +41,12 @@ impl JwtVerifier {
     }
 
     pub fn verify(&self, token: &str) -> Result<AccessClaims, AppError> {
-        decode::<AccessClaims>(token, &self.key, &self.validation)
+        self.decode::<AccessClaims>(token)
+    }
+
+    /// Decode + validate (signature, exp) any claims shape signed with this key.
+    pub fn decode<T: serde::de::DeserializeOwned>(&self, token: &str) -> Result<T, AppError> {
+        decode::<T>(token, &self.key, &self.validation)
             .map(|data| data.claims)
             .map_err(|e| AppError::Unauthorized(format!("invalid token: {e}")))
     }
@@ -65,6 +73,7 @@ pub struct Authenticated(pub AccessClaims);
 impl<S> FromRequestParts<S> for Authenticated
 where
     Arc<JwtVerifier>: FromRef<S>,
+    Arc<dyn RevocationChecker>: FromRef<S>,
     S: Send + Sync,
 {
     type Rejection = AppError;
@@ -83,6 +92,15 @@ where
             .ok_or_else(|| AppError::Unauthorized("expected Bearer token".into()))?;
         let verifier = Arc::<JwtVerifier>::from_ref(state);
         let claims = verifier.verify(token)?;
+
+        let checker = Arc::<dyn RevocationChecker>::from_ref(state);
+        if checker
+            .is_revoked(&claims)
+            .await
+            .map_err(AppError::Internal)?
+        {
+            return Err(AppError::Unauthorized("token revoked".into()));
+        }
         Ok(Authenticated(claims))
     }
 }

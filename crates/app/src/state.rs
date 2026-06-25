@@ -8,7 +8,7 @@ use domain_account::AccountState;
 use domain_auth::auth::jwt::JwtIssuer;
 use domain_auth::ports::postgres::PostgresUserRepository;
 use domain_auth::AuthState;
-use platform::auth::JwtVerifier;
+use platform::auth::{JwtVerifier, NoopRevocationChecker};
 use platform::config::Settings;
 use platform::db::{self, Db};
 use platform::events::{
@@ -104,6 +104,8 @@ pub fn account_state(res: &Resources) -> AccountState {
         publisher: res.publisher.clone(),
         jwt: res.jwt.clone(),
         metrics: res.metrics.clone(),
+        // TODO(2b Task 6): swap to PostgresRevocationChecker
+        revocation: Arc::new(NoopRevocationChecker),
     }
 }
 
