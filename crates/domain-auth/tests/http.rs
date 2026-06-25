@@ -1,0 +1,92 @@
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use domain_auth::auth::jwt::JwtIssuer;
+use domain_auth::ports::http::{router, AuthState};
+use domain_auth::ports::postgres::PostgresUserRepository;
+use http_body_util::BodyExt;
+use platform::events::{OutboxPublisher, Routes};
+use platform::metrics::Metrics;
+use std::sync::Arc;
+use tower::ServiceExt;
+
+const TEST_PRIV_PEM: &str = include_str!("fixtures/test_priv.pem");
+
+fn state(pool: sqlx::PgPool) -> AuthState {
+    AuthState {
+        pool: pool.clone(),
+        users: Arc::new(PostgresUserRepository::new(pool.clone())),
+        publisher: Arc::new(OutboxPublisher::new(
+            Routes::new().add("user.registered", "account.on-user-registered"),
+        )),
+        issuer: Arc::new(JwtIssuer::from_rsa_pem(TEST_PRIV_PEM, 900, 7).unwrap()),
+        admin_emails: Arc::new(vec![]),
+        metrics: Metrics::new().unwrap(),
+    }
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn register_then_login(pool: sqlx::PgPool) {
+    let app = router(state(pool.clone()));
+
+    // Register.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/register")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"email":"a@b.c","password":"hunter2"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Duplicate email -> 409.
+    let dup = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/register")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"email":"a@b.c","password":"hunter2"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dup.status(), StatusCode::CONFLICT);
+
+    // Login with correct password -> 200 + tokens.
+    let login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"email":"a@b.c","password":"hunter2"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let body = login.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["access_token"].as_str().unwrap().len() > 10);
+
+    // Wrong password -> 401.
+    let bad = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"email":"a@b.c","password":"wrong"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), StatusCode::UNAUTHORIZED);
+}
