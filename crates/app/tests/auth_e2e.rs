@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 const TEST_PRIV_PEM: &str = include_str!("../../domain-auth/tests/fixtures/test_priv.pem");
+const TEST_PUB_PEM: &str = include_str!("../../domain-auth/tests/fixtures/test_pub.pem");
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn register_then_dispatch_creates_account(pool: sqlx::PgPool) {
@@ -29,11 +30,15 @@ async fn register_then_dispatch_creates_account(pool: sqlx::PgPool) {
     )));
     let registry = Arc::new(registry);
 
+    let auth_repo = Arc::new(PostgresUserRepository::new(pool.clone()));
     let auth = router(AuthState {
         pool: pool.clone(),
-        users: Arc::new(PostgresUserRepository::new(pool.clone())),
+        users: auth_repo.clone(),
+        refresh_tokens: auth_repo.clone(),
         publisher: publisher.clone(),
         issuer: Arc::new(JwtIssuer::from_rsa_pem(TEST_PRIV_PEM, 900, 7).unwrap()),
+        verifier: Arc::new(platform::auth::JwtVerifier::from_rsa_pem(TEST_PUB_PEM).unwrap()),
+        revocation: Arc::new(platform::auth::NoopRevocationChecker),
         admin_emails: Arc::new(vec![]),
         metrics: Metrics::new().unwrap(),
     });

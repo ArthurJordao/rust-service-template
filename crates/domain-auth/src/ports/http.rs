@@ -4,11 +4,13 @@ use crate::domain::{check_credentials, effective_scopes};
 use crate::models::{NewUser, User};
 use crate::ports::dto::{AuthTokens, LoginRequest, RegisterRequest};
 use crate::ports::postgres::register_user_with_event;
+use crate::ports::RefreshTokenRepository;
 use crate::ports::UserRepository;
 use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use http::StatusCode;
+use platform::auth::{JwtVerifier, RevocationChecker};
 use platform::db::Db;
 use platform::events::EventPublisher;
 use platform::metrics::Metrics;
@@ -20,8 +22,11 @@ use std::sync::Arc;
 pub struct AuthState {
     pub pool: Db,
     pub users: Arc<dyn UserRepository>,
+    pub refresh_tokens: Arc<dyn RefreshTokenRepository>,
     pub publisher: Arc<dyn EventPublisher>,
     pub issuer: Arc<JwtIssuer>,
+    pub verifier: Arc<JwtVerifier>,
+    pub revocation: Arc<dyn RevocationChecker>,
     pub admin_emails: Arc<Vec<String>>,
     pub metrics: Metrics,
 }
@@ -52,9 +57,14 @@ pub async fn issue_token_pair(state: &AuthState, user: &User) -> Result<AuthToke
         .issuer
         .issue_access(user.id, &user.email, scopes, now)
         .map_err(AppError::Internal)?;
-    let (_jti, refresh_token, _exp) = state
+    let (jti, refresh_token, refresh_exp) = state
         .issuer
         .issue_refresh(user.id, now)
+        .map_err(AppError::Internal)?;
+    state
+        .refresh_tokens
+        .store(&jti, user.id, refresh_exp)
+        .await
         .map_err(AppError::Internal)?;
     Ok(AuthTokens {
         access_token,

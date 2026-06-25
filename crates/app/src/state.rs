@@ -87,11 +87,16 @@ pub async fn build_resources(settings: Settings) -> anyhow::Result<Resources> {
 }
 
 pub fn auth_state(res: &Resources) -> AuthState {
+    let repo = Arc::new(PostgresUserRepository::new(res.pool.clone()));
     AuthState {
         pool: res.pool.clone(),
-        users: Arc::new(PostgresUserRepository::new(res.pool.clone())),
+        users: repo.clone(),
+        refresh_tokens: repo.clone(),
         publisher: res.publisher.clone(),
         issuer: res.issuer.clone(),
+        verifier: res.jwt.clone(),
+        // TODO(2b Task 6): swap to PostgresRevocationChecker
+        revocation: Arc::new(NoopRevocationChecker),
         admin_emails: res.admin_emails.clone(),
         metrics: res.metrics.clone(),
     }

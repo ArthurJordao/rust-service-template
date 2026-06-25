@@ -10,15 +10,20 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 const TEST_PRIV_PEM: &str = include_str!("fixtures/test_priv.pem");
+const TEST_PUB_PEM: &str = include_str!("fixtures/test_pub.pem");
 
 fn state(pool: sqlx::PgPool) -> AuthState {
+    let repo = Arc::new(PostgresUserRepository::new(pool.clone()));
     AuthState {
         pool: pool.clone(),
-        users: Arc::new(PostgresUserRepository::new(pool.clone())),
+        users: repo.clone(),
+        refresh_tokens: repo.clone(),
         publisher: Arc::new(OutboxPublisher::new(
             Routes::new().add("user.registered", "account.on-user-registered"),
         )),
         issuer: Arc::new(JwtIssuer::from_rsa_pem(TEST_PRIV_PEM, 900, 7).unwrap()),
+        verifier: Arc::new(platform::auth::JwtVerifier::from_rsa_pem(TEST_PUB_PEM).unwrap()),
+        revocation: Arc::new(platform::auth::NoopRevocationChecker),
         admin_emails: Arc::new(vec![]),
         metrics: Metrics::new().unwrap(),
     }
@@ -89,4 +94,26 @@ async fn register_then_login(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(bad.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn register_persists_refresh_token(pool: sqlx::PgPool) {
+    let app = router(state(pool.clone()));
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/register")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"email":"a@b.c","password":"hunter2"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let n: i64 = sqlx::query_scalar("select count(*) from refresh_token")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
 }
