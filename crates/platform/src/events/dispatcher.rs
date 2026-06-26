@@ -84,9 +84,24 @@ pub async fn dispatch_once(
                 .bind(row.delivery_id)
                 .execute(pool)
                 .await?;
+                tracing::info!(
+                    delivery_id = row.delivery_id,
+                    subscriber = %row.subscriber_name,
+                    event_type = %delivered.event_type,
+                    "delivery delivered"
+                );
             }
             Err(e) => {
-                mark_failure(pool, row.delivery_id, row.attempts, config.max_attempts, &e).await?;
+                mark_failure(
+                    pool,
+                    row.delivery_id,
+                    &row.subscriber_name,
+                    &delivered.event_type,
+                    row.attempts,
+                    config.max_attempts,
+                    &e,
+                )
+                .await?;
             }
         }
     }
@@ -97,6 +112,8 @@ pub async fn dispatch_once(
 async fn mark_failure(
     pool: &Db,
     delivery_id: i64,
+    subscriber: &str,
+    event_type: &str,
     attempts: i32,
     max_attempts: i32,
     err: &anyhow::Error,
@@ -113,7 +130,13 @@ async fn mark_failure(
         .bind(err.to_string())
         .execute(pool)
         .await?;
-        tracing::error!(delivery_id, error = %err, "delivery dead-lettered");
+        tracing::error!(
+            delivery_id,
+            subscriber = %subscriber,
+            event_type = %event_type,
+            error = %err,
+            "delivery dead-lettered"
+        );
     } else {
         let backoff_secs = (2_i64.pow(next_attempts as u32)).min(300);
         sqlx::query(
@@ -128,7 +151,14 @@ async fn mark_failure(
         .bind(backoff_secs.to_string())
         .execute(pool)
         .await?;
-        tracing::warn!(delivery_id, attempt = next_attempts, error = %err, "delivery failed; will retry");
+        tracing::warn!(
+            delivery_id,
+            subscriber = %subscriber,
+            event_type = %event_type,
+            attempt = next_attempts,
+            error = %err,
+            "delivery failed; will retry"
+        );
     }
     Ok(())
 }
