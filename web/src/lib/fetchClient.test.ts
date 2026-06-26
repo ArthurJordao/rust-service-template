@@ -43,4 +43,44 @@ describe("apiFetch", () => {
     await expect(apiFetch("/accounts/me")).rejects.toMatchObject({ status: 404 });
     await expect(apiFetch("/accounts/me")).rejects.toBeInstanceOf(ApiError);
   });
+
+  it("sends an X-Correlation-Id header", async () => {
+    let seen: string | null = null;
+    server.use(
+      http.get("/api/accounts/me", ({ request }) => {
+        seen = request.headers.get("x-correlation-id");
+        return HttpResponse.json({ email: "a@b.c" });
+      }),
+    );
+    await apiFetch("/accounts/me");
+    expect(seen).toBeTruthy();
+    expect(seen!.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("reuses the same cid across a 401 refresh+retry", async () => {
+    tokenStore.setAccessToken("stale");
+    tokenStore.setRefreshToken("rt-1");
+    const cids: string[] = [];
+    server.use(
+      http.get("/api/accounts/me", ({ request }) => {
+        cids.push(request.headers.get("x-correlation-id") ?? "");
+        const auth = request.headers.get("authorization");
+        if (auth === "Bearer stale") return new HttpResponse(null, { status: 401 });
+        return HttpResponse.json({ email: "ok@b.c" });
+      }),
+      http.post("/api/auth/refresh", () =>
+        HttpResponse.json({ access_token: "fresh", refresh_token: "rt-1", token_type: "Bearer", expires_in: 900 })),
+    );
+    await apiFetch("/accounts/me");
+    expect(cids).toHaveLength(2);
+    expect(cids[0]).toBe(cids[1]); // same cid on the retry
+  });
+
+  it("populates ApiError.cid from the response header", async () => {
+    server.use(
+      http.get("/api/accounts/me", () =>
+        HttpResponse.json({ error: "nope" }, { status: 404, headers: { "x-correlation-id": "root.ab12cd" } })),
+    );
+    await expect(apiFetch("/accounts/me")).rejects.toMatchObject({ status: 404, cid: "root.ab12cd" });
+  });
 });
