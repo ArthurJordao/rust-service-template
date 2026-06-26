@@ -9,8 +9,14 @@ pub const CORRELATION_ID_HEADER: &str = "x-correlation-id";
 #[derive(Debug, Clone)]
 pub struct CorrelationId(pub String);
 
-pub fn new_correlation_id() -> String {
-    uuid::Uuid::new_v4().to_string()
+/// A short correlation-id segment (6 hex chars derived from a uuid v4).
+pub fn new_segment() -> String {
+    uuid::Uuid::new_v4().simple().to_string()[..6].to_string()
+}
+
+/// Extend a correlation id with a fresh child segment: `parent` -> `parent.<seg>`.
+pub fn append(cid: &str) -> String {
+    format!("{cid}.{}", new_segment())
 }
 
 /// Install a JSON tracing subscriber. Idempotent: a second call is a no-op.
@@ -36,7 +42,7 @@ pub async fn correlation_id_middleware(mut req: Request, next: Next) -> Response
         .get(CORRELATION_ID_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
-        .unwrap_or_else(new_correlation_id);
+        .unwrap_or_else(new_segment);
 
     req.extensions_mut().insert(CorrelationId(cid.clone()));
 
@@ -65,7 +71,7 @@ where
             .extensions
             .get::<CorrelationId>()
             .cloned()
-            .unwrap_or_else(|| CorrelationId(new_correlation_id())))
+            .unwrap_or_else(|| CorrelationId(new_segment())))
     }
 }
 
@@ -74,8 +80,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generates_non_empty_cid() {
-        let cid = new_correlation_id();
-        assert_eq!(cid.len(), 36); // uuid v4 hyphenated
+    fn segment_is_short_and_append_grows_path() {
+        let seg = new_segment();
+        assert_eq!(seg.len(), 6);
+        assert!(seg.chars().all(|c| c.is_ascii_alphanumeric()));
+
+        let child = append("abc123");
+        assert!(
+            child.starts_with("abc123."),
+            "child must extend the parent: {child}"
+        );
+        assert_eq!(child.matches('.').count(), 1);
+        assert_eq!(child.len(), "abc123.".len() + 6);
     }
 }
