@@ -1,6 +1,6 @@
 use crate::db::Db;
 
-#[derive(Debug, serde::Serialize, sqlx::FromRow)]
+#[derive(Debug, serde::Serialize, sqlx::FromRow, utoipa::ToSchema)]
 pub struct DeadLetter {
     pub delivery_id: i64,
     pub subscriber_name: String,

@@ -5,8 +5,12 @@ use crate::server::AppError;
 use axum::extract::{FromRef, Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde_json::json;
 use std::sync::Arc;
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct ReplayResponse {
+    pub replayed: bool,
+}
 
 #[derive(Clone)]
 pub struct DlqState {
@@ -49,11 +53,11 @@ async fn replay_handler(
     State(state): State<DlqState>,
     Authenticated(claims): Authenticated,
     Path(delivery_id): Path<i64>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<ReplayResponse>, AppError> {
     require_scope(&claims, "admin")?;
     let replayed = replay_dead_letter(&state.pool, delivery_id)
         .await
         .map_err(AppError::Internal)?;
     tracing::info!(delivery_id, "dlq delivery replayed");
-    Ok(Json(json!({ "replayed": replayed })))
+    Ok(Json(ReplayResponse { replayed }))
 }
