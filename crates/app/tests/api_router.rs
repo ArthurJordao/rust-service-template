@@ -41,11 +41,21 @@ fn build(pool: sqlx::PgPool) -> axum::Router {
         metrics: metrics.clone(),
     };
     let dlq = DlqState {
-        pool,
+        pool: pool.clone(),
         jwt: jwt.clone(),
         revocation: revocation.clone(),
     };
-    app::state::build_router(account, auth, dlq, metrics, &[], None)
+    let notification = domain_notification::NotificationState {
+        repo: Arc::new(
+            domain_notification::ports::postgres::PostgresSentNotificationRepository::new(
+                pool.clone(),
+            ),
+        ),
+        jwt: jwt.clone(),
+        revocation: revocation.clone(),
+        metrics: metrics.clone(),
+    };
+    app::state::build_router(account, auth, dlq, notification, metrics, &[], None)
 }
 
 #[sqlx::test(migrations = "../../migrations")]

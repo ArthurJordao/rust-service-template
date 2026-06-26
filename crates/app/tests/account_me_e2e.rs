@@ -62,7 +62,17 @@ async fn register_dispatch_then_get_my_account(pool: sqlx::PgPool) {
         jwt: jwt.clone(),
         revocation: revocation.clone(),
     };
-    let app = app::state::build_router(account, auth, dlq, metrics, &[], None);
+    let notification = domain_notification::NotificationState {
+        repo: Arc::new(
+            domain_notification::ports::postgres::PostgresSentNotificationRepository::new(
+                pool.clone(),
+            ),
+        ),
+        jwt: jwt.clone(),
+        revocation: revocation.clone(),
+        metrics: metrics.clone(),
+    };
+    let app = app::state::build_router(account, auth, dlq, notification, metrics, &[], None);
 
     // Register -> tokens
     let reg = app

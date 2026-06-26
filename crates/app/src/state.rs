@@ -12,6 +12,11 @@ use domain_auth::auth::jwt::JwtIssuer;
 use domain_auth::ports::postgres::PostgresUserRepository;
 use domain_auth::ports::revocation::PostgresRevocationChecker;
 use domain_auth::AuthState;
+use domain_notification::ports::events::NotificationSubscriber;
+use domain_notification::ports::notifier::LogNotifier;
+use domain_notification::ports::postgres::PostgresSentNotificationRepository;
+use domain_notification::ports::templates::Templates;
+use domain_notification::NotificationState;
 use platform::auth::{JwtVerifier, RevocationChecker};
 use platform::config::Settings;
 use platform::db::{self, Db};
@@ -41,7 +46,9 @@ pub struct Resources {
 /// knows about. Declared here so the publisher never depends on subscriber
 /// instances — this is what keeps construction linear and cycle-free.
 fn routes() -> Routes {
-    Routes::new().add("user.registered", "account.on-user-registered")
+    Routes::new()
+        .add("user.registered", "account.on-user-registered")
+        .add("account.created", "notification.on-account-created")
 }
 
 pub async fn build_resources(settings: Settings) -> anyhow::Result<Resources> {
@@ -81,6 +88,13 @@ pub async fn build_resources(settings: Settings) -> anyhow::Result<Resources> {
         pool.clone(),
         account_repo.clone(),
         publisher.clone(),
+    )));
+    let templates = std::sync::Arc::new(Templates::new().context("load notification templates")?);
+    let notif_repo = Arc::new(PostgresSentNotificationRepository::new(pool.clone()));
+    registry.register(Arc::new(NotificationSubscriber::new(
+        notif_repo,
+        Arc::new(LogNotifier),
+        templates,
     )));
     // 3) the registry (subscriber instances) is consumed only by the dispatcher.
     let registry = Arc::new(registry);
@@ -144,6 +158,15 @@ pub fn dlq_state(res: &Resources) -> DlqState {
     }
 }
 
+pub fn notification_state(res: &Resources) -> NotificationState {
+    NotificationState {
+        repo: Arc::new(PostgresSentNotificationRepository::new(res.pool.clone())),
+        jwt: res.jwt.clone(),
+        revocation: res.revocation.clone(),
+        metrics: res.metrics.clone(),
+    }
+}
+
 /// Middleware that promotes a 404 + text/html response to 200.
 ///
 /// `ServeDir::not_found_service(ServeFile::new(index))` serves `index.html` for
@@ -175,13 +198,15 @@ pub fn build_router(
     account: AccountState,
     auth: AuthState,
     dlq: DlqState,
+    notification: NotificationState,
     metrics: Metrics,
     cors_origins: &[String],
     web_dist: Option<PathBuf>,
 ) -> Router {
     let api = domain_account::router(account)
         .merge(domain_auth::router(auth))
-        .merge(dlq_router(dlq));
+        .merge(dlq_router(dlq))
+        .merge(domain_notification::router(notification));
 
     let metrics_for_handler = metrics.clone();
     let mut app = Router::new()
