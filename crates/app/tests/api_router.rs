@@ -103,6 +103,7 @@ async fn status_at_root_and_api_routes_mounted(pool: sqlx::PgPool) {
 
     // login is reachable under /api (bad body -> 400/422, NOT 404) — proves no route collision
     let login = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -114,4 +115,16 @@ async fn status_at_root_and_api_routes_mounted(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_ne!(login.status(), StatusCode::NOT_FOUND);
+
+    // OpenAPI spec is served at /api/openapi.json -> 200
+    let spec = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/openapi.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(spec.status(), StatusCode::OK);
 }
