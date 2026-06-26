@@ -9,19 +9,55 @@ microservices template — see the design doc for the full rationale.
 
 ## Current state
 
-**Nothing is built yet.** The repo currently contains only design + planning
-docs and git history. Your job is to implement it from the plans below.
+Specs 1–3 are **implemented and merged to `main`** (full Rust + web test suites
+green; `cargo clippy -D warnings` + fmt clean). What exists today:
+
+- `crates/platform` — config, db (Postgres pool + migrations), the transactional
+  **outbox** (publish / dispatcher / retries / DLQ + `dlq_http` admin routes), `auth`
+  (RS256 JWT verify, `Authenticated` extractor, scope guard, `RevocationChecker` port),
+  metrics, http_client, observability (correlation-id request middleware), server
+  (`AppError`, CORS).
+- `crates/domain-account` — `/accounts`, `/accounts/:id`, `/accounts/me`; consumes
+  `user.registered`, emits `account.created`.
+- `crates/domain-auth` — register / login / refresh / logout (bcrypt, RS256 issuance),
+  **Postgres-backed token revocation (no Redis)**, admin scope management; the real
+  producer of `user.registered`.
+- `crates/app` — composition root (**lib + bin**): builds resources, assembles the
+  router via `build_router` (API nested under `/api`, `/status`+`/metrics` at root,
+  serves the SPA from `web/dist` with an SPA fallback), runs server + outbox dispatcher
+  + denylist prune task.
+- `web/` — React 19 + Vite + TS + Tailwind + shadcn SPA: auth (access in memory,
+  refresh in localStorage, silent refresh), account view, `/admin/*` (users + DLQ).
+- `migrations/` 0001–0005; `docker-compose.yml`, `Makefile`, `scripts/new-domain.sh`.
+
+**Remaining work is specced but not yet built** — see the Status table.
 
 ## Start here (read in this order)
 
-1. `docs/superpowers/specs/2026-06-24-rust-service-template-design.md` — the
-   approved architecture and the rationale behind every decision (read §2
-   "Architecture decisions" before writing any code).
-2. Then execute these three plans **in order** — each is self-contained,
-   independently testable, and produces working software:
-   1. `docs/superpowers/plans/2026-06-24-rust-spec1a-workspace-and-platform.md`
-   2. `docs/superpowers/plans/2026-06-24-rust-spec1b-outbox-events.md`
-   3. `docs/superpowers/plans/2026-06-24-rust-spec1c-account-domain-and-app.md`
+1. `docs/superpowers/specs/2026-06-24-rust-service-template-design.md` — the approved
+   architecture + rationale (read §2 "Architecture decisions" before writing code).
+2. The per-area design doc in `docs/superpowers/specs/` for whatever you're touching.
+3. The Status table below, then execute the relevant plan(s) in
+   `docs/superpowers/plans/` with `superpowers:subagent-driven-development`.
+
+## Status (done vs pending)
+
+| Area | Spec | Plan(s) | Built |
+|---|---|---|---|
+| Spec 1 — platform + outbox + domain-account | ✅ | ✅ 1a/1b/1c | ✅ merged |
+| Spec 2 — domain-auth | ✅ | ✅ 2a/2b/2c | ✅ merged |
+| Spec 3 — web SPA + backend prereqs | ✅ | ✅ 3a + web 3b/3c | ✅ merged |
+| Correlation IDs + structured logging | ✅ `…-correlation-id-logging-design.md` | ❌ needs `writing-plans` | ❌ |
+| domain-notification (Spec 4) | ✅ `…-domain-notification-design.md` | ❌ needs `writing-plans` | ❌ |
+| utoipa typed API client | ✅ `…-openapi-typed-client-design.md` | ✅ `utoipa-a-backend.md` + `utoipa-b-frontend.md` | ❌ |
+
+Each pending item follows the repo's **brainstorm → spec → plan → execute** cycle.
+The cid/logging and notification specs still need plans written; **utoipa is
+plan-ready to execute**. Author's stated priority order: correlation-ids/logging first.
+Open design musings deliberately *not* yet recorded as decisions: synchronous
+cross-domain queries (lean: events-carry-data → query-port traits → a `contracts`
+crate if bidirectional; Cargo forbids crate cycles) and a frontend BFF/aggregate
+layer (lean: none yet; add view endpoints in `app` when round-trips hurt).
 
 ## How to execute a plan
 
@@ -36,15 +72,17 @@ docs and git history. Your job is to implement it from the plans below.
 
 ## Environment prerequisites
 
-- **Rust** stable (a `rust-toolchain.toml` is created in Plan 1a Task 1).
-- **Postgres** reachable for tests in Plans 1b/1c. Tests use `#[sqlx::test]`,
-  which provisions an isolated DB per test and runs `./migrations` — it needs
-  `DATABASE_URL` set, e.g.
-  `export DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres`.
-  Plan 1c Task 8 adds a `docker-compose.yml` (`docker compose up -d postgres`);
-  until then, any local Postgres works.
-- **`sqlx-cli`** for the `migrate` Makefile target: `cargo install sqlx-cli`.
-- **`openssl`** to generate the RSA test-key fixture (Plan 1c Task 5 Step 2).
+- **Rust** stable, pinned via `rust-toolchain.toml` (needs 1.85+ — a transitive dep
+  requires edition 2024).
+- **Postgres** for `#[sqlx::test]` integration tests (provisions an isolated DB per
+  test, runs `./migrations`; needs a role with CREATEDB). `make up` starts the
+  docker-compose Postgres; set `DATABASE_URL`, e.g.
+  `postgres://postgres:postgres@localhost:5432/postgres` (docker-compose) — any local
+  Postgres works. (No Docker handy? A local `postgres` install works too; adjust the
+  role/URL accordingly.)
+- **Node ≥ 20 + npm** for the `web/` SPA: `make web-install` / `web-dev` / `web-build`.
+- **`sqlx-cli`** for `make migrate`; **`openssl`** for the RSA test-key fixtures
+  (under `crates/*/tests/fixtures/`).
 
 ## Architectural invariants — do NOT drift from these
 
@@ -66,19 +104,15 @@ These are the point of the template; preserve them while implementing:
 - **One crate per domain.** Cross-domain access goes through public interfaces
   and events only.
 
-## Roadmap beyond Spec 1 (not yet specced)
+## Further roadmap (not yet specced)
 
-Spec 2 = `domain-auth` (JWT issuance, login/refresh/logout, Redis revocation;
-becomes the real producer of `user.registered`, replacing the dev stand-in).
-Spec 3 = `web/` React SPA (Vite + TS + Tailwind + shadcn) with `/admin/*` route
-group. Spec 4+ = `domain-notification` and further domains.
+- **Templatize** via `cargo generate` — approach **(B)**: keep concrete names so the
+  repo always builds; generation renames the known strings. (Revisit native
+  `{{placeholder}}` templating, approach (A), only once fully working.) See design §11.
+- Additional domains via `scripts/new-domain.sh`.
 
-Also planned (see design doc §11–§12), do NOT start these until a slice runs:
-- **Templatize** via `cargo generate` — approach **(B)**: keep concrete names so
-  the repo always builds; generation renames the known strings. (Revisit native
-  `{{placeholder}}` templating, approach (A), only once fully working.)
-- **API schema / typed TS client** (open question, leaning `utoipa` + OpenAPI +
-  `openapi-typescript`/`openapi-fetch`) — its own brainstorm → spec → plan cycle.
-
-When you finish Spec 1, brainstorm + spec + plan the next spec before
-implementing it (same spec → plan → execute cycle this repo was built with).
+Decision history: Spec 2 ended up **Postgres-backed revocation, not Redis** (consistent
+with outbox-over-Kafka — one datastore, no extra infra); the typed-client question
+(design §12) resolved to **utoipa + openapi-typescript (types only)**, keeping the SPA's
+custom fetch client. Continue the **brainstorm → spec → plan → execute** cycle for each
+new spec.
