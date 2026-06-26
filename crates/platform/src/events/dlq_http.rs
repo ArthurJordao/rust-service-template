@@ -38,6 +38,9 @@ pub fn dlq_router(state: DlqState) -> Router {
         .with_state(state)
 }
 
+#[utoipa::path(get, path = "/admin/dlq",
+    responses((status = 200, body = [DeadLetter]), (status = 401), (status = 403)),
+    security(("bearer_auth" = [])), tag = "admin")]
 async fn list_handler(
     State(state): State<DlqState>,
     Authenticated(claims): Authenticated,
@@ -49,6 +52,10 @@ async fn list_handler(
     Ok(Json(rows))
 }
 
+#[utoipa::path(post, path = "/admin/dlq/{delivery_id}/replay",
+    params(("delivery_id" = i64, Path,)),
+    responses((status = 200, body = ReplayResponse), (status = 401), (status = 403)),
+    security(("bearer_auth" = [])), tag = "admin")]
 async fn replay_handler(
     State(state): State<DlqState>,
     Authenticated(claims): Authenticated,
@@ -61,3 +68,11 @@ async fn replay_handler(
     tracing::info!(delivery_id, "dlq delivery replayed");
     Ok(Json(ReplayResponse { replayed }))
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(list_handler, replay_handler),
+    components(schemas(crate::events::DeadLetter, ReplayResponse)),
+    tags((name = "admin"))
+)]
+pub struct ApiDoc;
