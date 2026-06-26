@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/auth/AuthProvider";
+import { refSuffix } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,8 +21,8 @@ export function RegisterPage() {
     try {
       await register(email, password);
       navigate("/");
-    } catch {
-      toast.error("Registration failed (email may be taken)");
+    } catch (e) {
+      toast.error("Registration failed (email may be taken)" + refSuffix(e));
     } finally {
       setBusy(false);
     }
