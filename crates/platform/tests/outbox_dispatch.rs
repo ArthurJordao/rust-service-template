@@ -47,7 +47,15 @@ async fn dispatch_delivers_pending_and_marks_delivered(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(n, 1);
-    assert_eq!(rec.0.lock().unwrap().as_slice(), &["cid-xyz".to_string()]);
+    {
+        let recorded = rec.0.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert!(
+            recorded[0].starts_with("cid-xyz."),
+            "delivered cid should extend the producer cid: {}",
+            recorded[0]
+        );
+    }
 
     let delivered: i64 =
         sqlx::query_scalar("select count(*) from outbox_delivery where status = 'delivered'")
