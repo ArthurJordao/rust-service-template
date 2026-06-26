@@ -55,12 +55,12 @@ pub async fn build_resources(settings: Settings) -> anyhow::Result<Resources> {
     }
 
     let jwt = Arc::new(
-        JwtVerifier::from_rsa_pem(&settings.auth.jwt_public_key_pem)
+        JwtVerifier::from_rsa_pem(&settings.auth.public_key_pem()?)
             .context("parse JWT public key")?,
     );
     let issuer = Arc::new(
         JwtIssuer::from_rsa_pem(
-            &settings.auth.jwt_private_key_pem,
+            &settings.auth.private_key_pem()?,
             settings.auth.access_token_ttl_seconds,
             settings.auth.refresh_token_ttl_days,
         )

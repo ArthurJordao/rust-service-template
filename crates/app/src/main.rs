@@ -5,6 +5,10 @@ use platform::observability::init_tracing;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Load a local `.env` if present (dev convenience). No-op in prod/CI where the
+    // file is absent and real environment variables are used instead.
+    dotenvy::dotenv().ok();
+
     init_tracing("info");
     let settings = Settings::load()?;
 
