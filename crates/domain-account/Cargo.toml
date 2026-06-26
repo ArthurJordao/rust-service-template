@@ -15,6 +15,7 @@ async-trait.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 http.workspace = true
+utoipa.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

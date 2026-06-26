@@ -18,6 +18,7 @@ http.workspace = true
 jsonwebtoken.workspace = true
 bcrypt.workspace = true
 uuid.workspace = true
+utoipa.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

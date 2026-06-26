@@ -21,6 +21,8 @@ tower-http = { workspace = true }
 tracing.workspace = true
 anyhow.workspace = true
 dotenvy.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
 
 [dev-dependencies]
 domain-account = { path = "../domain-account" }
