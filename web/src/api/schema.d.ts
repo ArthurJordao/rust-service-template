@@ -148,6 +148,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_notifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/scopes": {
         parameters: {
             query?: never;
@@ -252,6 +268,19 @@ export interface components {
             /** Format: int64 */
             id: number;
             name: string;
+        };
+        SentNotification: {
+            body: string;
+            channel: string;
+            /** Format: date-time */
+            created_at: string;
+            created_by_cid: string;
+            /** Format: int64 */
+            id: number;
+            recipient: string;
+            /** Format: int64 */
+            source_event_id: number;
+            template: string;
         };
         SetScopesRequest: {
             scopes: string[];
@@ -537,6 +566,37 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_notifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SentNotification"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -8,6 +8,7 @@ pub fn api_doc() -> OpenApi {
     let mut doc = domain_auth::openapi::ApiDoc::openapi();
     doc.merge(domain_account::openapi::ApiDoc::openapi());
     doc.merge(platform::events::dlq_http::ApiDoc::openapi());
+    doc.merge(domain_notification::openapi::ApiDoc::openapi());
 
     // Bearer (JWT) security scheme.
     let components = doc.components.get_or_insert_with(Default::default);
@@ -40,6 +41,7 @@ mod tests {
             "/accounts/me",
             "/users/{id}/scopes",
             "/admin/dlq",
+            "/notifications",
         ] {
             assert!(json.contains(path), "missing path {path}");
         }
@@ -49,6 +51,7 @@ mod tests {
             "DeadLetter",
             "ReplayResponse",
             "UserWithScopes",
+            "SentNotification",
         ] {
             assert!(json.contains(schema), "missing schema {schema}");
         }

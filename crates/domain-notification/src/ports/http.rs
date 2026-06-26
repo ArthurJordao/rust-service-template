@@ -34,7 +34,10 @@ pub fn router(state: NotificationState) -> Router {
         .with_state(state)
 }
 
-async fn list_notifications(
+#[utoipa::path(get, path = "/notifications",
+    responses((status = 200, body = [SentNotification]), (status = 401), (status = 403)),
+    security(("bearer_auth" = [])), tag = "notifications")]
+pub(crate) async fn list_notifications(
     State(state): State<NotificationState>,
     Authenticated(claims): Authenticated,
 ) -> Result<Json<Vec<SentNotification>>, AppError> {
