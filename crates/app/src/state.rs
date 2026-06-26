@@ -144,6 +144,31 @@ pub fn dlq_state(res: &Resources) -> DlqState {
     }
 }
 
+/// Middleware that promotes a 404 + text/html response to 200.
+///
+/// `ServeDir::not_found_service(ServeFile::new(index))` serves `index.html` for
+/// unknown paths, but tower-http 0.6 preserves the outer 404 status from
+/// `ServeDir` even though the inner `ServeFile` handler returns 200.  This
+/// middleware fixes up the status so browser navigation to SPA routes works.
+async fn spa_status_fixup(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut res = next.run(req).await;
+    if res.status() == axum::http::StatusCode::NOT_FOUND {
+        let is_html = res
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|ct| ct.starts_with("text/html"))
+            .unwrap_or(false);
+        if is_html {
+            *res.status_mut() = axum::http::StatusCode::OK;
+        }
+    }
+    res
+}
+
 /// Assemble the full application router: API under `/api`, infra at root, and an
 /// optional static SPA fallback. Pure (no I/O) so it is unit-testable.
 pub fn build_router(
@@ -171,8 +196,19 @@ pub fn build_router(
         .nest("/api", api);
 
     if let Some(dir) = web_dist {
+        // Serve the SPA: ServeDir handles exact static-asset requests (JS/CSS/
+        // images/favicon) with correct MIME types and 200 statuses.  For any
+        // client-side route that has no matching file on disk (e.g. /admin/dlq),
+        // ServeDir's not_found_service delivers index.html — but tower-http 0.6
+        // preserves ServeDir's outer 404 status even though the inner ServeFile
+        // returns 200.  The spa_status_fixup middleware corrects this: when the
+        // response is 404 + text/html it can only be the SPA shell, so we
+        // promote it to 200.
         let index = dir.join("index.html");
-        app = app.fallback_service(ServeDir::new(dir).not_found_service(ServeFile::new(index)));
+        let spa_router = Router::new()
+            .fallback_service(ServeDir::new(&dir).not_found_service(ServeFile::new(&index)));
+
+        app = app.fallback_service(spa_router.layer(axum::middleware::from_fn(spa_status_fixup)));
     }
 
     app.layer(axum::middleware::from_fn(correlation_id_middleware))
