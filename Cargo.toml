@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/platform", "crates/domain-account", "crates/domain-auth", "crates/app"]
+members = ["crates/platform", "crates/domain-account", "crates/domain-auth", "crates/app", "crates/domain-notification"]
 
 [workspace.package]
 edition = "2021"
@@ -29,3 +29,4 @@ http = "1"
 http-body-util = "0.1"
 bcrypt = "0.16"
 dotenvy = "0.15"
+handlebars = "6"
