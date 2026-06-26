@@ -1,13 +1,16 @@
 import { tokenStore } from "@/auth/tokenStore";
+import { newSegment } from "@/lib/cid";
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  cid?: string;
+  constructor(status: number, message: string, cid?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.cid = cid;
   }
 }
 
@@ -37,8 +40,8 @@ interface Opts {
   auth?: boolean; // default true
 }
 
-async function raw(path: string, opts: Opts): Promise<Response> {
-  const headers: Record<string, string> = {};
+async function raw(path: string, opts: Opts, cid: string): Promise<Response> {
+  const headers: Record<string, string> = { "x-correlation-id": cid };
   if (opts.body !== undefined) headers["content-type"] = "application/json";
   const token = tokenStore.getAccessToken();
   if (opts.auth !== false && token) headers["authorization"] = `Bearer ${token}`;
@@ -50,24 +53,25 @@ async function raw(path: string, opts: Opts): Promise<Response> {
 }
 
 export async function apiFetch<T>(path: string, opts: Opts = {}): Promise<T> {
-  let res = await raw(path, opts);
+  const cid = newSegment();
+  let res = await raw(path, opts, cid);
 
   if (res.status === 401 && opts.auth !== false) {
     // single-flight refresh
     refreshing ??= refreshAccessToken().finally(() => { refreshing = null; });
     const ok = await refreshing;
     if (ok) {
-      res = await raw(path, opts);
+      res = await raw(path, opts, cid); // same cid on retry
     } else {
       onAuthFailure();
-      throw new ApiError(401, "unauthorized");
+      throw new ApiError(401, "unauthorized", res.headers.get("x-correlation-id") ?? undefined);
     }
   }
 
   if (!res.ok) {
     let message = res.statusText;
     try { const j = await res.json(); message = j.error ?? message; } catch { /* ignore */ }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, res.headers.get("x-correlation-id") ?? undefined);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/auth/AuthProvider";
+import { refSuffix } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,8 +21,8 @@ export function LoginPage() {
     try {
       await login(email, password);
       navigate("/");
-    } catch {
-      toast.error("Invalid credentials");
+    } catch (e) {
+      toast.error("Invalid credentials" + refSuffix(e));
     } finally {
       setBusy(false);
     }

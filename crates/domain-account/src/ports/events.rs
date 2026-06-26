@@ -68,6 +68,10 @@ impl Subscriber for AccountSubscriber {
             &event.correlation_id,
         )
         .await?;
+        tracing::info!(
+            auth_user_id = payload.auth_user_id,
+            "account created from user.registered"
+        );
         Ok(())
     }
 }

@@ -54,5 +54,6 @@ async fn replay_handler(
     let replayed = replay_dead_letter(&state.pool, delivery_id)
         .await
         .map_err(AppError::Internal)?;
+    tracing::info!(delivery_id, "dlq delivery replayed");
     Ok(Json(json!({ "replayed": replayed })))
 }

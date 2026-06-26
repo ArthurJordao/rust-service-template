@@ -1,4 +1,5 @@
 use crate::events::{NewEvent, Routes};
+use crate::observability::append;
 
 #[async_trait::async_trait]
 pub trait EventPublisher: Send + Sync {
@@ -20,6 +21,7 @@ impl OutboxPublisher {
 #[async_trait::async_trait]
 impl EventPublisher for OutboxPublisher {
     async fn publish(&self, conn: &mut sqlx::PgConnection, event: NewEvent) -> anyhow::Result<i64> {
+        let event_cid = append(&event.correlation_id);
         let event_id: i64 = sqlx::query_scalar(
             "insert into outbox_event (event_type, aggregate_id, payload, correlation_id) \
              values ($1, $2, $3, $4) returning id",
@@ -27,7 +29,7 @@ impl EventPublisher for OutboxPublisher {
         .bind(&event.event_type)
         .bind(&event.aggregate_id)
         .bind(&event.payload)
-        .bind(&event.correlation_id)
+        .bind(&event_cid)
         .fetch_one(&mut *conn)
         .await?;
 

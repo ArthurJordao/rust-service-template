@@ -121,6 +121,7 @@ async fn register(
     )
     .await
     .map_err(AppError::Internal)?;
+    tracing::info!(email = %user.email, user_id = user.id, "user registered");
     let tokens = issue_token_pair(&state, &user).await?;
     Ok((StatusCode::CREATED, Json(tokens)))
 }
@@ -134,7 +135,14 @@ async fn login(
         .find_by_email(&body.email)
         .await
         .map_err(AppError::Internal)?;
-    let user = check_credentials(found.as_ref(), &body.password)?.clone();
+    let user = match check_credentials(found.as_ref(), &body.password) {
+        Ok(u) => u.clone(),
+        Err(e) => {
+            tracing::warn!(email = %body.email, "login failed");
+            return Err(e);
+        }
+    };
+    tracing::info!(email = %user.email, "login succeeded");
     let tokens = issue_token_pair(&state, &user).await?;
     Ok(Json(tokens))
 }
@@ -189,6 +197,7 @@ async fn logout(
     State(state): State<AuthState>,
     Json(body): Json<LogoutRequest>,
 ) -> Result<StatusCode, AppError> {
+    tracing::info!("logout");
     // Revoke the refresh token if it parses and has the correct type (idempotent on garbage).
     if let Ok(claims) = state.verifier.decode::<RefreshClaims>(&body.refresh_token) {
         if claims.token_type == "refresh" {
@@ -278,5 +287,6 @@ async fn set_user_scopes(
         .replace_user_scopes(id, &body.scopes)
         .await
         .map_err(AppError::Internal)?;
+    tracing::info!(target_user = id, "user scopes replaced");
     Ok(StatusCode::NO_CONTENT)
 }
