@@ -23,10 +23,10 @@ export function EditScopesDialog({ user }: { user: UserWithScopes }) {
         <DialogHeader><DialogTitle>Scopes for {user.email}</DialogTitle></DialogHeader>
         <div className="space-y-2">
           {(catalog ?? []).map((s) => (
-            <label key={s.id} className="flex items-center gap-2">
-              <Checkbox checked={selected.includes(s.name)} onCheckedChange={(v) => toggle(s.name, !!v)} />
-              <Label className="font-normal">{s.name}<span className="ml-2 text-xs text-muted-foreground">{s.description}</span></Label>
-            </label>
+            <div key={s.id} className="flex items-center gap-2">
+              <Checkbox id={`scope-${s.id}`} checked={selected.includes(s.name)} onCheckedChange={(v) => toggle(s.name, !!v)} />
+              <Label htmlFor={`scope-${s.id}`} className="font-normal">{s.name}<span className="ml-2 text-xs text-muted-foreground">{s.description}</span></Label>
+            </div>
           ))}
         </div>
         <DialogFooter>
