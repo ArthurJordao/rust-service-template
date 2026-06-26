@@ -22,6 +22,7 @@ async fn main() -> anyhow::Result<()> {
         state::account_state(&res),
         state::auth_state(&res),
         state::dlq_state(&res),
+        state::notification_state(&res),
         res.metrics.clone(),
         &res.settings.cors_allowed_origins,
         web_dist,
