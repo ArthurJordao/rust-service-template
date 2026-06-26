@@ -41,7 +41,10 @@ pub fn router(state: AccountState) -> Router {
         .with_state(state)
 }
 
-async fn list_accounts(
+#[utoipa::path(get, path = "/accounts",
+    responses((status = 200, body = [Account]), (status = 401), (status = 403)),
+    security(("bearer_auth" = [])), tag = "accounts")]
+pub(crate) async fn list_accounts(
     State(state): State<AccountState>,
     Authenticated(claims): Authenticated,
 ) -> Result<Json<Vec<Account>>, AppError> {
@@ -50,7 +53,11 @@ async fn list_accounts(
     Ok(Json(accounts))
 }
 
-async fn get_account(
+#[utoipa::path(get, path = "/accounts/{id}",
+    params(("id" = i64, Path,)),
+    responses((status = 200, body = Account), (status = 401), (status = 403), (status = 404)),
+    security(("bearer_auth" = [])), tag = "accounts")]
+pub(crate) async fn get_account(
     State(state): State<AccountState>,
     Authenticated(claims): Authenticated,
     Path(id): Path<i64>,
@@ -65,7 +72,10 @@ async fn get_account(
     Ok(Json(account))
 }
 
-async fn account_me(
+#[utoipa::path(get, path = "/accounts/me",
+    responses((status = 200, body = Account), (status = 401), (status = 404)),
+    security(("bearer_auth" = [])), tag = "accounts")]
+pub(crate) async fn account_me(
     State(state): State<AccountState>,
     Authenticated(claims): Authenticated,
 ) -> Result<Json<Account>, AppError> {
