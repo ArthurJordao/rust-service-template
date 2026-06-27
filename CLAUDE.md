@@ -9,55 +9,66 @@ microservices template — see the design doc for the full rationale.
 
 ## Current state
 
-Specs 1–3 are **implemented and merged to `main`** (full Rust + web test suites
-green; `cargo clippy -D warnings` + fmt clean). What exists today:
+Specs 1–4 **plus** correlation-id/logging and the utoipa typed client are all
+**implemented and merged to `main`** (full Rust + web test suites green;
+`cargo clippy -D warnings` + fmt clean). What exists today:
 
-- `crates/platform` — config, db (Postgres pool + migrations), the transactional
-  **outbox** (publish / dispatcher / retries / DLQ + `dlq_http` admin routes), `auth`
-  (RS256 JWT verify, `Authenticated` extractor, scope guard, `RevocationChecker` port),
-  metrics, http_client, observability (correlation-id request middleware), server
-  (`AppError`, CORS).
+- `crates/platform` — config (env + `.env` via dotenvy, key-file JWT config), db
+  (Postgres pool + migrations), the transactional **outbox** (publish / dispatcher /
+  retries / DLQ + `dlq_http` admin routes), `auth` (RS256 JWT verify, `Authenticated`
+  extractor, scope guard, `RevocationChecker` port), metrics, http_client,
+  observability (**hierarchical correlation IDs** — `new_segment`/`append`, request
+  middleware appends per hop + access log, `RUST_LOG`), server (`AppError`, CORS).
 - `crates/domain-account` — `/accounts`, `/accounts/:id`, `/accounts/me`; consumes
   `user.registered`, emits `account.created`.
 - `crates/domain-auth` — register / login / refresh / logout (bcrypt, RS256 issuance),
   **Postgres-backed token revocation (no Redis)**, admin scope management; the real
   producer of `user.registered`.
+- `crates/domain-notification` — consumes `account.created`, renders a handlebars
+  welcome template (strict mode), dispatches via a `Notifier` port (dev `LogNotifier`),
+  records `sent_notification` idempotently; admin `GET /notifications`. Depends only on
+  `platform` (re-derives the event payload locally — no `domain-account` dep).
 - `crates/app` — composition root (**lib + bin**): builds resources, assembles the
   router via `build_router` (API nested under `/api`, `/status`+`/metrics` at root,
-  serves the SPA from `web/dist` with an SPA fallback), runs server + outbox dispatcher
-  + denylist prune task.
+  serves the SPA from `web/dist` with an SPA fallback; serves `/api/openapi.json` +
+  Swagger UI at `/swagger-ui`), runs server + outbox dispatcher + denylist prune task.
+  Ships an `openapi-gen` bin that prints the merged OpenAPI doc.
 - `web/` — React 19 + Vite + TS + Tailwind + shadcn SPA: auth (access in memory,
   refresh in localStorage, silent refresh), account view, `/admin/*` (users + DLQ).
-- `migrations/` 0001–0005; `docker-compose.yml`, `Makefile`, `scripts/new-domain.sh`.
+  Custom fetch client sends `X-Correlation-Id` per call (stable across the 401 retry),
+  surfaces the cid on error toasts; request/response types are **generated from the
+  OpenAPI doc** (`make gen-api` → committed `web/src/api/schema.d.ts`) and `apiFetch`'s
+  path is constrained to the API's real routes (wrong path = `tsc` error).
+- `migrations/` 0001–0006; `docker-compose.yml`, `Makefile` (incl. `make gen-api`),
+  `scripts/new-domain.sh`.
 
-**Remaining work is specced but not yet built** — see the Status table.
+**All specced work to date is built.** The only remaining items are the
+not-yet-specced roadmap entries below.
 
 ## Start here (read in this order)
 
 1. `docs/superpowers/specs/2026-06-24-rust-service-template-design.md` — the approved
    architecture + rationale (read §2 "Architecture decisions" before writing code).
 2. The per-area design doc in `docs/superpowers/specs/` for whatever you're touching.
-3. The Status table below, then execute the relevant plan(s) in
+3. The Status table below, then (for any *new* spec) execute the relevant plan(s) in
    `docs/superpowers/plans/` with `superpowers:subagent-driven-development`.
 
-## Status (done vs pending)
+## Status (all specced work is built)
 
 | Area | Spec | Plan(s) | Built |
 |---|---|---|---|
 | Spec 1 — platform + outbox + domain-account | ✅ | ✅ 1a/1b/1c | ✅ merged |
 | Spec 2 — domain-auth | ✅ | ✅ 2a/2b/2c | ✅ merged |
 | Spec 3 — web SPA + backend prereqs | ✅ | ✅ 3a + web 3b/3c | ✅ merged |
-| Correlation IDs + structured logging | ✅ `…-correlation-id-logging-design.md` | ❌ needs `writing-plans` | ❌ |
-| domain-notification (Spec 4) | ✅ `…-domain-notification-design.md` | ❌ needs `writing-plans` | ❌ |
-| utoipa typed API client | ✅ `…-openapi-typed-client-design.md` | ✅ `utoipa-a-backend.md` + `utoipa-b-frontend.md` | ❌ |
+| Correlation IDs + structured logging | ✅ | ✅ cid-a-backend + cid-b-frontend | ✅ merged |
+| domain-notification (Spec 4) | ✅ | ✅ rust-spec4-domain-notification | ✅ merged |
+| utoipa typed API client | ✅ | ✅ utoipa-a-backend + utoipa-b-frontend | ✅ merged |
 
-Each pending item follows the repo's **brainstorm → spec → plan → execute** cycle.
-The cid/logging and notification specs still need plans written; **utoipa is
-plan-ready to execute**. Author's stated priority order: correlation-ids/logging first.
 Open design musings deliberately *not* yet recorded as decisions: synchronous
 cross-domain queries (lean: events-carry-data → query-port traits → a `contracts`
 crate if bidirectional; Cargo forbids crate cycles) and a frontend BFF/aggregate
-layer (lean: none yet; add view endpoints in `app` when round-trips hurt).
+layer (lean: none yet; add view endpoints in `app` when round-trips hurt). Any new
+work follows the repo's **brainstorm → spec → plan → execute** cycle.
 
 ## How to execute a plan
 
