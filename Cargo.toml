@@ -30,3 +30,5 @@ http-body-util = "0.1"
 bcrypt = "0.16"
 dotenvy = "0.15"
 handlebars = "6"
+utoipa = { version = "5", features = ["axum_extras", "chrono"] }
+utoipa-swagger-ui = { version = "8", features = ["axum"] }

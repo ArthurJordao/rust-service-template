@@ -2,7 +2,7 @@ use crate::auth::jwt::JwtIssuer;
 use crate::auth::jwt::RefreshClaims;
 use crate::auth::password::hash_password;
 use crate::domain::{check_credentials, effective_scopes};
-use crate::models::{NewUser, User};
+use crate::models::{NewUser, ScopeRow, User};
 use crate::ports::dto::{
     AuthTokens, LoginRequest, LogoutRequest, RefreshRequest, RegisterRequest, SetScopesRequest,
     UserWithScopes,
@@ -94,7 +94,9 @@ pub async fn issue_token_pair(state: &AuthState, user: &User) -> Result<AuthToke
     })
 }
 
-async fn register(
+#[utoipa::path(post, path = "/auth/register", request_body = RegisterRequest,
+    responses((status = 201, body = AuthTokens), (status = 409)), tag = "auth")]
+pub(crate) async fn register(
     State(state): State<AuthState>,
     CorrelationId(cid): CorrelationId,
     Json(body): Json<RegisterRequest>,
@@ -126,7 +128,9 @@ async fn register(
     Ok((StatusCode::CREATED, Json(tokens)))
 }
 
-async fn login(
+#[utoipa::path(post, path = "/auth/login", request_body = LoginRequest,
+    responses((status = 200, body = AuthTokens), (status = 401)), tag = "auth")]
+pub(crate) async fn login(
     State(state): State<AuthState>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<AuthTokens>, AppError> {
@@ -147,7 +151,9 @@ async fn login(
     Ok(Json(tokens))
 }
 
-async fn refresh(
+#[utoipa::path(post, path = "/auth/refresh", request_body = RefreshRequest,
+    responses((status = 200, body = AuthTokens), (status = 401)), tag = "auth")]
+pub(crate) async fn refresh(
     State(state): State<AuthState>,
     Json(body): Json<RefreshRequest>,
 ) -> Result<Json<AuthTokens>, AppError> {
@@ -193,7 +199,9 @@ async fn refresh(
     }))
 }
 
-async fn logout(
+#[utoipa::path(post, path = "/auth/logout", request_body = LogoutRequest,
+    responses((status = 204)), tag = "auth")]
+pub(crate) async fn logout(
     State(state): State<AuthState>,
     Json(body): Json<LogoutRequest>,
 ) -> Result<StatusCode, AppError> {
@@ -227,7 +235,10 @@ async fn logout(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn list_scopes(
+#[utoipa::path(get, path = "/scopes",
+    responses((status = 200, body = [ScopeRow]), (status = 401), (status = 403)),
+    security(("bearer_auth" = [])), tag = "admin")]
+pub(crate) async fn list_scopes(
     State(state): State<AuthState>,
     Authenticated(claims): Authenticated,
 ) -> Result<Json<Vec<crate::models::ScopeRow>>, AppError> {
@@ -240,7 +251,10 @@ async fn list_scopes(
     Ok(Json(catalog))
 }
 
-async fn list_users(
+#[utoipa::path(get, path = "/users",
+    responses((status = 200, body = [UserWithScopes]), (status = 401), (status = 403)),
+    security(("bearer_auth" = [])), tag = "admin")]
+pub(crate) async fn list_users(
     State(state): State<AuthState>,
     Authenticated(claims): Authenticated,
 ) -> Result<Json<Vec<UserWithScopes>>, AppError> {
@@ -261,7 +275,11 @@ async fn list_users(
     ))
 }
 
-async fn get_user_scopes(
+#[utoipa::path(get, path = "/users/{id}/scopes",
+    params(("id" = i64, Path,)),
+    responses((status = 200, body = [String]), (status = 401), (status = 403)),
+    security(("bearer_auth" = [])), tag = "admin")]
+pub(crate) async fn get_user_scopes(
     State(state): State<AuthState>,
     Authenticated(claims): Authenticated,
     Path(id): Path<i64>,
@@ -275,7 +293,11 @@ async fn get_user_scopes(
     Ok(Json(scopes))
 }
 
-async fn set_user_scopes(
+#[utoipa::path(put, path = "/users/{id}/scopes",
+    params(("id" = i64, Path,)), request_body = SetScopesRequest,
+    responses((status = 204), (status = 401), (status = 403)),
+    security(("bearer_auth" = [])), tag = "admin")]
+pub(crate) async fn set_user_scopes(
     State(state): State<AuthState>,
     Authenticated(claims): Authenticated,
     Path(id): Path<i64>,

@@ -16,7 +16,7 @@ pub struct NewUser {
     pub password_hash: String,
 }
 
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, utoipa::ToSchema)]
 pub struct ScopeRow {
     pub id: i64,
     pub name: String,

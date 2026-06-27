@@ -10,6 +10,10 @@ path = "src/lib.rs"
 name = "app"
 path = "src/main.rs"
 
+[[bin]]
+name = "openapi-gen"
+path = "src/bin/openapi_gen.rs"
+
 [dependencies]
 platform = { path = "../platform" }
 domain-account = { path = "../domain-account" }
@@ -21,6 +25,8 @@ tower-http = { workspace = true }
 tracing.workspace = true
 anyhow.workspace = true
 dotenvy.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
 
 [dev-dependencies]
 domain-account = { path = "../domain-account" }

@@ -5,8 +5,12 @@ use crate::server::AppError;
 use axum::extract::{FromRef, Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde_json::json;
 use std::sync::Arc;
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct ReplayResponse {
+    pub replayed: bool,
+}
 
 #[derive(Clone)]
 pub struct DlqState {
@@ -34,6 +38,9 @@ pub fn dlq_router(state: DlqState) -> Router {
         .with_state(state)
 }
 
+#[utoipa::path(get, path = "/admin/dlq",
+    responses((status = 200, body = [DeadLetter]), (status = 401), (status = 403)),
+    security(("bearer_auth" = [])), tag = "admin")]
 async fn list_handler(
     State(state): State<DlqState>,
     Authenticated(claims): Authenticated,
@@ -45,15 +52,27 @@ async fn list_handler(
     Ok(Json(rows))
 }
 
+#[utoipa::path(post, path = "/admin/dlq/{delivery_id}/replay",
+    params(("delivery_id" = i64, Path,)),
+    responses((status = 200, body = ReplayResponse), (status = 401), (status = 403)),
+    security(("bearer_auth" = [])), tag = "admin")]
 async fn replay_handler(
     State(state): State<DlqState>,
     Authenticated(claims): Authenticated,
     Path(delivery_id): Path<i64>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<ReplayResponse>, AppError> {
     require_scope(&claims, "admin")?;
     let replayed = replay_dead_letter(&state.pool, delivery_id)
         .await
         .map_err(AppError::Internal)?;
     tracing::info!(delivery_id, "dlq delivery replayed");
-    Ok(Json(json!({ "replayed": replayed })))
+    Ok(Json(ReplayResponse { replayed }))
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(list_handler, replay_handler),
+    components(schemas(crate::events::DeadLetter, ReplayResponse)),
+    tags((name = "admin"))
+)]
+pub struct ApiDoc;

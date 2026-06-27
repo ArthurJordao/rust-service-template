@@ -28,6 +28,7 @@ use platform::metrics::Metrics;
 use platform::observability::correlation_id_middleware;
 use platform::server::{cors_layer, status_handler};
 use tower_http::services::{ServeDir, ServeFile};
+use utoipa_swagger_ui::SwaggerUi;
 
 /// All shared resources, constructed once at startup.
 pub struct Resources {
@@ -235,6 +236,9 @@ pub fn build_router(
 
         app = app.fallback_service(spa_router.layer(axum::middleware::from_fn(spa_status_fixup)));
     }
+
+    app = app
+        .merge(SwaggerUi::new("/swagger-ui").url("/api/openapi.json", crate::openapi::api_doc()));
 
     app.layer(axum::middleware::from_fn(correlation_id_middleware))
         .layer(cors_layer(cors_origins))

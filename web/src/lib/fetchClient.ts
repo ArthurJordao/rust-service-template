@@ -1,5 +1,14 @@
 import { tokenStore } from "@/auth/tokenStore";
 import { newSegment } from "@/lib/cid";
+import type { paths } from "@/api/schema";
+
+// Expand OpenAPI path params ({id}) into `${string}` so interpolated calls type-check,
+// while exact (param-free) paths still reject typos.
+type ExpandPath<T extends string> =
+  T extends `${infer Head}{${string}}${infer Tail}`
+    ? `${Head}${string}${ExpandPath<Tail>}`
+    : T;
+export type ApiPath = ExpandPath<keyof paths & string>;
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
@@ -52,7 +61,7 @@ async function raw(path: string, opts: Opts, cid: string): Promise<Response> {
   });
 }
 
-export async function apiFetch<T>(path: string, opts: Opts = {}): Promise<T> {
+export async function apiFetch<T>(path: ApiPath, opts: Opts = {}): Promise<T> {
   const cid = newSegment();
   let res = await raw(path, opts, cid);
 
