@@ -1,5 +1,6 @@
 use crate::db::Db;
-use crate::events::{DeliveredEvent, SubscriberRegistry};
+use crate::events::{DeliveredEvent, Subscriber, SubscriberRegistry};
+use futures::stream::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
@@ -88,6 +89,83 @@ pub async fn claim_batch(
 
     tx.commit().await?;
     Ok(rows)
+}
+
+async fn ack_delivered(pool: &Db, delivery_id: i64) -> anyhow::Result<()> {
+    sqlx::query(
+        "update outbox_delivery set status = 'delivered', updated_at = now() where id = $1",
+    )
+    .bind(delivery_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Run one claim-and-handle cycle for a single subscriber. Claims up to the
+/// subscriber's `batch_size`, handles the batch under `buffer_unordered(concurrency)`
+/// (concurrency 1 = strictly serial, in id order), and acks each row. Handlers run
+/// with NO transaction open. Returns the number of deliveries attempted.
+pub async fn dispatch_subscriber_once(
+    pool: &Db,
+    subscriber: &dyn Subscriber,
+    config: &DispatcherConfig,
+) -> anyhow::Result<usize> {
+    let cfg = subscriber.consumer_config();
+    let rows = claim_batch(pool, subscriber.name(), cfg.batch_size).await?;
+    let attempted = rows.len();
+
+    futures::stream::iter(rows)
+        .map(|row| async move {
+            let delivered = DeliveredEvent {
+                event_id: row.event_id,
+                event_type: row.event_type,
+                aggregate_id: row.aggregate_id,
+                payload: row.payload,
+                correlation_id: row.correlation_id.clone(),
+            };
+
+            let span = tracing::info_span!(
+                "event.handle",
+                cid = %row.correlation_id,
+                subscriber = subscriber.name(),
+                event_type = %delivered.event_type,
+            );
+
+            match subscriber.handle(&delivered).instrument(span).await {
+                Ok(()) => {
+                    if let Err(e) = ack_delivered(pool, row.delivery_id).await {
+                        tracing::error!(delivery_id = row.delivery_id, error = %e, "ack delivered failed");
+                    } else {
+                        tracing::info!(
+                            delivery_id = row.delivery_id,
+                            subscriber = %row.subscriber_name,
+                            event_type = %delivered.event_type,
+                            "delivery delivered"
+                        );
+                    }
+                }
+                Err(e) => {
+                    if let Err(e2) = mark_failure(
+                        pool,
+                        row.delivery_id,
+                        &row.subscriber_name,
+                        &delivered.event_type,
+                        row.attempts,
+                        config.max_attempts,
+                        &e,
+                    )
+                    .await
+                    {
+                        tracing::error!(delivery_id = row.delivery_id, error = %e2, "mark_failure failed");
+                    }
+                }
+            }
+        })
+        .buffer_unordered(cfg.concurrency.max(1))
+        .collect::<Vec<()>>()
+        .await;
+
+    Ok(attempted)
 }
 
 /// Process one batch of due deliveries. Returns the number attempted.
@@ -201,7 +279,7 @@ async fn mark_failure(
         let backoff_secs = (2_i64.pow(next_attempts as u32)).min(300);
         sqlx::query(
             "update outbox_delivery \
-             set attempts = $2, last_error = $3, \
+             set status = 'pending', attempts = $2, last_error = $3, \
                  next_attempt_at = now() + ($4 || ' seconds')::interval, updated_at = now() \
              where id = $1",
         )
