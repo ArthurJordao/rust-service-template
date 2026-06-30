@@ -14,8 +14,10 @@ Specs 1–4 **plus** correlation-id/logging and the utoipa typed client are all
 `cargo clippy -D warnings` + fmt clean). What exists today:
 
 - `crates/platform` — config (env + `.env` via dotenvy, key-file JWT config), db
-  (Postgres pool + migrations), the transactional **outbox** (publish / dispatcher /
-  retries / DLQ + `dlq_http` admin routes), `auth` (RS256 JWT verify, `Authenticated`
+  (Postgres pool + migrations), the transactional **outbox** (publish / **per-subscriber
+  consumer loops** that claim with `FOR UPDATE SKIP LOCKED` into a `processing` state so
+  handlers run outside the DB transaction / retries / a **reaper** that reclaims stale
+  `processing` rows after a crash / DLQ + `dlq_http` admin routes), `auth` (RS256 JWT verify, `Authenticated`
   extractor, scope guard, `RevocationChecker` port), metrics, http_client,
   observability (**hierarchical correlation IDs** — `new_segment`/`append`, request
   middleware appends per hop + access log, `RUST_LOG`), server (`AppError`, CORS).
@@ -31,7 +33,8 @@ Specs 1–4 **plus** correlation-id/logging and the utoipa typed client are all
 - `crates/app` — composition root (**lib + bin**): builds resources, assembles the
   router via `build_router` (API nested under `/api`, `/status`+`/metrics` at root,
   serves the SPA from `web/dist` with an SPA fallback; serves `/api/openapi.json` +
-  Swagger UI at `/swagger-ui`), runs server + outbox dispatcher + denylist prune task.
+  Swagger UI at `/swagger-ui`), runs server + outbox consumers (per-subscriber loops +
+  reaper) + denylist prune task.
   Ships an `openapi-gen` bin that prints the merged OpenAPI doc.
 - `web/` — React 19 + Vite + TS + Tailwind + shadcn SPA: auth (access in memory,
   refresh in localStorage, silent refresh), account view, `/admin/*` (users + DLQ).
