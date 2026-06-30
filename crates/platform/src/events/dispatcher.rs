@@ -39,15 +39,55 @@ impl Default for ReaperConfig {
 }
 
 #[derive(sqlx::FromRow)]
-struct DueRow {
-    delivery_id: i64,
-    subscriber_name: String,
-    attempts: i32,
-    event_id: i64,
-    event_type: String,
-    aggregate_id: String,
-    payload: serde_json::Value,
-    correlation_id: String,
+pub struct DueRow {
+    pub delivery_id: i64,
+    pub subscriber_name: String,
+    pub attempts: i32,
+    pub event_id: i64,
+    pub event_type: String,
+    pub aggregate_id: String,
+    pub payload: serde_json::Value,
+    pub correlation_id: String,
+}
+
+/// Claim up to `batch_size` due deliveries for one subscriber, flipping them to
+/// `processing` in a single short transaction. `FOR UPDATE … SKIP LOCKED` makes a
+/// concurrent claimer skip these rows and take the next free ones — no double-grab.
+/// The lock is released on commit, BEFORE any handler runs.
+pub async fn claim_batch(
+    pool: &Db,
+    subscriber_name: &str,
+    batch_size: i64,
+) -> anyhow::Result<Vec<DueRow>> {
+    let mut tx = pool.begin().await?;
+    let rows: Vec<DueRow> = sqlx::query_as(
+        "select d.id as delivery_id, d.subscriber_name, d.attempts, \
+                e.id as event_id, e.event_type, e.aggregate_id, e.payload, e.correlation_id \
+         from outbox_delivery d \
+         join outbox_event e on e.id = d.event_id \
+         where d.subscriber_name = $1 and d.status = 'pending' and d.next_attempt_at <= now() \
+         order by d.id \
+         limit $2 \
+         for update of d skip locked",
+    )
+    .bind(subscriber_name)
+    .bind(batch_size)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if !rows.is_empty() {
+        let ids: Vec<i64> = rows.iter().map(|r| r.delivery_id).collect();
+        sqlx::query(
+            "update outbox_delivery set status = 'processing', updated_at = now() \
+             where id = any($1)",
+        )
+        .bind(&ids)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(rows)
 }
 
 /// Process one batch of due deliveries. Returns the number attempted.
