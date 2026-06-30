@@ -23,6 +23,7 @@ pub struct ReaperConfig {
     /// queue. Configurable; default 5 min. Raise only as a deliberate exception —
     /// a handler routinely exceeding it is the real smell.
     pub visibility_timeout: Duration,
+    /// How often the reaper sweeps for stale `processing` rows.
     pub poll_interval: Duration,
 }
 
@@ -254,8 +255,8 @@ pub async fn run_consumers(
         set.spawn(run_subscriber_loop(pool.clone(), sub, dispatcher.clone()));
     }
     set.spawn(run_reaper(pool, reaper, max_attempts));
-    if set.join_next().await.is_some() {
-        tracing::error!("a consumer task exited unexpectedly");
+    if let Some(res) = set.join_next().await {
+        tracing::error!(result = ?res, "a consumer task exited unexpectedly");
     }
 }
 
