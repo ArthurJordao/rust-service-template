@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
 use axum::routing::get;
@@ -22,7 +21,7 @@ use platform::config::Settings;
 use platform::db::{self, Db};
 use platform::events::{
     dlq_http::{dlq_router, DlqState},
-    DispatcherConfig, EventPublisher, OutboxPublisher, Routes, SubscriberRegistry,
+    EventPublisher, OutboxPublisher, Routes, SubscriberRegistry,
 };
 use platform::metrics::Metrics;
 use platform::observability::correlation_id_middleware;
@@ -140,15 +139,8 @@ pub fn account_state(res: &Resources) -> AccountState {
     }
 }
 
-pub fn dispatcher_handle(
-    res: &Resources,
-) -> (Db, Arc<SubscriberRegistry>, DispatcherConfig, Duration) {
-    (
-        res.pool.clone(),
-        res.registry.clone(),
-        DispatcherConfig::default(),
-        Duration::from_secs(2),
-    )
+pub fn consumers_handle(res: &Resources) -> (Db, Arc<SubscriberRegistry>) {
+    (res.pool.clone(), res.registry.clone())
 }
 
 pub fn dlq_state(res: &Resources) -> DlqState {

@@ -20,5 +20,5 @@ create table outbox_delivery (
     unique (event_id, subscriber_name)
 );
 
-create index outbox_delivery_due_idx
-    on outbox_delivery (status, next_attempt_at);
+create index outbox_delivery_claim_idx
+    on outbox_delivery (subscriber_name, status, next_attempt_at);
