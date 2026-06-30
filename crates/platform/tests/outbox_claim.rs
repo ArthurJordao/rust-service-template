@@ -12,8 +12,10 @@ async fn insert_event(pool: &sqlx::PgPool) -> i64 {
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn claim_flips_to_processing_and_does_not_reclaim(pool: sqlx::PgPool) {
-    let event_id = insert_event(&pool).await;
+    // Four distinct events, one delivery each for subscriber "s".
+    // unique(event_id, subscriber_name) forbids multiple deliveries per event/subscriber.
     for _ in 0..4 {
+        let event_id = insert_event(&pool).await;
         sqlx::query("insert into outbox_delivery (event_id, subscriber_name) values ($1, 's')")
             .bind(event_id)
             .execute(&pool)

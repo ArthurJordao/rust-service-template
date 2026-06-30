@@ -16,7 +16,8 @@ create table outbox_delivery (
     last_error      text,
     next_attempt_at timestamptz not null default now(),
     created_at      timestamptz not null default now(),
-    updated_at      timestamptz not null default now()
+    updated_at      timestamptz not null default now(),
+    unique (event_id, subscriber_name)
 );
 
 create index outbox_delivery_claim_idx
