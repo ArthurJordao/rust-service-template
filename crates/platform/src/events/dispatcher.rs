@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
 
+#[derive(Debug, Clone)]
 pub struct DispatcherConfig {
     pub max_attempts: i32,
     pub batch_size: i64,
@@ -14,6 +15,25 @@ impl Default for DispatcherConfig {
         DispatcherConfig {
             max_attempts: 5,
             batch_size: 50,
+        }
+    }
+}
+
+/// How the reaper reclaims rows stuck in `processing` (worker crashed mid-flight).
+#[derive(Debug, Clone)]
+pub struct ReaperConfig {
+    /// A `processing` row older than this is assumed orphaned and returned to the
+    /// queue. Configurable; default 5 min. Raise only as a deliberate exception —
+    /// a handler routinely exceeding it is the real smell.
+    pub visibility_timeout: Duration,
+    pub poll_interval: Duration,
+}
+
+impl Default for ReaperConfig {
+    fn default() -> Self {
+        ReaperConfig {
+            visibility_timeout: Duration::from_secs(300),
+            poll_interval: Duration::from_secs(30),
         }
     }
 }

@@ -1,5 +1,24 @@
 use std::sync::Arc;
 
+/// Per-subscriber processing knobs. Returned by `Subscriber::consumer_config`.
+/// `concurrency: 1` means message-by-message (serial, in `id` order).
+#[derive(Debug, Clone)]
+pub struct ConsumerConfig {
+    pub batch_size: i64,
+    pub concurrency: usize,
+    pub poll_interval: std::time::Duration,
+}
+
+impl Default for ConsumerConfig {
+    fn default() -> Self {
+        ConsumerConfig {
+            batch_size: 10,
+            concurrency: 5,
+            poll_interval: std::time::Duration::from_secs(2),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NewEvent {
     pub event_type: String,
@@ -24,6 +43,12 @@ pub trait Subscriber: Send + Sync {
     fn name(&self) -> &'static str;
     fn event_type(&self) -> &'static str;
     async fn handle(&self, event: &DeliveredEvent) -> anyhow::Result<()>;
+    /// How this subscriber's consumer loop claims and processes deliveries.
+    /// Override to opt into message-by-message (`concurrency: 1`) or to tune
+    /// batch size / poll cadence. Defaults are batched-and-concurrent.
+    fn consumer_config(&self) -> ConsumerConfig {
+        ConsumerConfig::default()
+    }
 }
 
 #[derive(Default)]
@@ -123,5 +148,16 @@ mod tests {
             ]
         );
         assert!(routes.names_for("other").is_empty());
+    }
+
+    #[test]
+    fn consumer_config_defaults_and_override() {
+        let d = ConsumerConfig::default();
+        assert_eq!(d.batch_size, 10);
+        assert_eq!(d.concurrency, 5);
+        assert_eq!(d.poll_interval, std::time::Duration::from_secs(2));
+
+        // A subscriber inherits the default unless it overrides.
+        assert_eq!(Dummy.consumer_config().concurrency, 5);
     }
 }
