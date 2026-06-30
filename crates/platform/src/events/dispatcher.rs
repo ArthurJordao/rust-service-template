@@ -301,6 +301,47 @@ async fn mark_failure(
     Ok(())
 }
 
+/// Long-running consumer loop for ONE subscriber: claim → handle → ack, then sleep
+/// `poll_interval`. Drains immediately (no sleep) when a full batch was claimed.
+pub async fn run_subscriber_loop(
+    pool: Db,
+    subscriber: Arc<dyn Subscriber>,
+    config: DispatcherConfig,
+) {
+    let cfg = subscriber.consumer_config();
+    let batch_size = cfg.batch_size as usize;
+    tracing::info!(subscriber = subscriber.name(), "consumer loop started");
+    loop {
+        match dispatch_subscriber_once(&pool, subscriber.as_ref(), &config).await {
+            Ok(n) if n >= batch_size && batch_size > 0 => continue,
+            Ok(_) => {}
+            Err(e) => {
+                tracing::error!(subscriber = subscriber.name(), error = %e, "dispatch cycle failed")
+            }
+        }
+        tokio::time::sleep(cfg.poll_interval).await;
+    }
+}
+
+/// Spawn one consumer loop per registered subscriber, plus the reaper. Returns if
+/// any task exits (loops never return normally, so that signals a problem).
+pub async fn run_consumers(
+    pool: Db,
+    registry: Arc<SubscriberRegistry>,
+    dispatcher: DispatcherConfig,
+    reaper: ReaperConfig,
+) {
+    let max_attempts = dispatcher.max_attempts;
+    let mut set = tokio::task::JoinSet::new();
+    for sub in registry.subscribers() {
+        set.spawn(run_subscriber_loop(pool.clone(), sub, dispatcher.clone()));
+    }
+    set.spawn(run_reaper(pool, reaper, max_attempts));
+    if set.join_next().await.is_some() {
+        tracing::error!("a consumer task exited unexpectedly");
+    }
+}
+
 /// Long-running dispatcher: drain due deliveries, sleep, repeat.
 pub async fn run_dispatcher(
     pool: Db,

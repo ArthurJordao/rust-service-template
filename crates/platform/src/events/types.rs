@@ -79,6 +79,11 @@ impl SubscriberRegistry {
     pub fn find(&self, name: &str) -> Option<Arc<dyn Subscriber>> {
         self.subscribers.iter().find(|s| s.name() == name).cloned()
     }
+
+    /// All registered subscribers (clones of the `Arc`s) — one consumer loop per entry.
+    pub fn subscribers(&self) -> Vec<Arc<dyn Subscriber>> {
+        self.subscribers.clone()
+    }
 }
 
 /// Event-type -> subscriber-name routing table used by the publisher to fan out
