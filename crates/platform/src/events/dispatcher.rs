@@ -318,3 +318,41 @@ pub async fn run_dispatcher(
         tokio::time::sleep(poll_interval).await;
     }
 }
+
+/// Reclaim deliveries stuck in `processing` past the visibility timeout (worker
+/// crashed mid-flight). Bumps attempts so a row that reliably crashes the worker is
+/// still eventually dead-lettered. Redelivery is safe because handlers are idempotent.
+pub async fn reap_stale(
+    pool: &Db,
+    visibility_timeout: Duration,
+    max_attempts: i32,
+) -> anyhow::Result<u64> {
+    let secs = visibility_timeout.as_secs() as i64;
+    let result = sqlx::query(
+        "update outbox_delivery \
+         set attempts = attempts + 1, \
+             status = case when attempts + 1 >= $2 then 'dead' else 'pending' end, \
+             last_error = 'reclaimed: processing timed out', \
+             next_attempt_at = now(), updated_at = now() \
+         where status = 'processing' \
+           and updated_at < now() - ($1 || ' seconds')::interval",
+    )
+    .bind(secs.to_string())
+    .bind(max_attempts)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// Long-running reaper: sweep stale `processing` rows, sleep, repeat.
+pub async fn run_reaper(pool: Db, config: ReaperConfig, max_attempts: i32) {
+    tracing::info!("outbox reaper started");
+    loop {
+        match reap_stale(&pool, config.visibility_timeout, max_attempts).await {
+            Ok(n) if n > 0 => tracing::warn!(reclaimed = n, "reaped stale processing deliveries"),
+            Ok(_) => {}
+            Err(e) => tracing::error!(error = %e, "reaper sweep failed"),
+        }
+        tokio::time::sleep(config.poll_interval).await;
+    }
+}
