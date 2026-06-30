@@ -8,15 +8,11 @@ use tracing::Instrument;
 #[derive(Debug, Clone)]
 pub struct DispatcherConfig {
     pub max_attempts: i32,
-    pub batch_size: i64,
 }
 
 impl Default for DispatcherConfig {
     fn default() -> Self {
-        DispatcherConfig {
-            max_attempts: 5,
-            batch_size: 50,
-        }
+        DispatcherConfig { max_attempts: 5 }
     }
 }
 
@@ -168,85 +164,6 @@ pub async fn dispatch_subscriber_once(
     Ok(attempted)
 }
 
-/// Process one batch of due deliveries. Returns the number attempted.
-pub async fn dispatch_once(
-    pool: &Db,
-    registry: &SubscriberRegistry,
-    config: &DispatcherConfig,
-) -> anyhow::Result<usize> {
-    let rows: Vec<DueRow> = sqlx::query_as(
-        "select d.id as delivery_id, d.subscriber_name, d.attempts, \
-                e.id as event_id, e.event_type, e.aggregate_id, e.payload, e.correlation_id \
-         from outbox_delivery d \
-         join outbox_event e on e.id = d.event_id \
-         where d.status = 'pending' and d.next_attempt_at <= now() \
-         order by d.id \
-         limit $1",
-    )
-    .bind(config.batch_size)
-    .fetch_all(pool)
-    .await?;
-
-    let attempted = rows.len();
-
-    for row in rows {
-        let delivered = DeliveredEvent {
-            event_id: row.event_id,
-            event_type: row.event_type,
-            aggregate_id: row.aggregate_id,
-            payload: row.payload,
-            correlation_id: row.correlation_id.clone(),
-        };
-
-        let Some(subscriber) = registry.find(&row.subscriber_name) else {
-            // No handler registered under this name (e.g. removed subscriber).
-            tracing::warn!(name = %row.subscriber_name, "no subscriber registered; skipping");
-            continue;
-        };
-
-        let span = tracing::info_span!(
-            "event.handle",
-            cid = %row.correlation_id,
-            subscriber = subscriber.name(),
-            event_type = %delivered.event_type,
-        );
-
-        let result = subscriber.handle(&delivered).instrument(span).await;
-
-        match result {
-            Ok(()) => {
-                sqlx::query(
-                    "update outbox_delivery set status = 'delivered', updated_at = now() \
-                     where id = $1",
-                )
-                .bind(row.delivery_id)
-                .execute(pool)
-                .await?;
-                tracing::info!(
-                    delivery_id = row.delivery_id,
-                    subscriber = %row.subscriber_name,
-                    event_type = %delivered.event_type,
-                    "delivery delivered"
-                );
-            }
-            Err(e) => {
-                mark_failure(
-                    pool,
-                    row.delivery_id,
-                    &row.subscriber_name,
-                    &delivered.event_type,
-                    row.attempts,
-                    config.max_attempts,
-                    &e,
-                )
-                .await?;
-            }
-        }
-    }
-
-    Ok(attempted)
-}
-
 async fn mark_failure(
     pool: &Db,
     delivery_id: i64,
@@ -339,24 +256,6 @@ pub async fn run_consumers(
     set.spawn(run_reaper(pool, reaper, max_attempts));
     if set.join_next().await.is_some() {
         tracing::error!("a consumer task exited unexpectedly");
-    }
-}
-
-/// Long-running dispatcher: drain due deliveries, sleep, repeat.
-pub async fn run_dispatcher(
-    pool: Db,
-    registry: Arc<SubscriberRegistry>,
-    config: DispatcherConfig,
-    poll_interval: Duration,
-) {
-    tracing::info!("outbox dispatcher started");
-    loop {
-        match dispatch_once(&pool, &registry, &config).await {
-            Ok(n) if n > 0 => tracing::debug!(attempted = n, "dispatched batch"),
-            Ok(_) => {}
-            Err(e) => tracing::error!(error = %e, "dispatch batch failed"),
-        }
-        tokio::time::sleep(poll_interval).await;
     }
 }
 

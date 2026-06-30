@@ -12,7 +12,7 @@ use domain_notification::ports::repository::SentNotificationRepository;
 use domain_notification::ports::templates::Templates;
 use platform::auth::{JwtVerifier, NoopRevocationChecker};
 use platform::events::{
-    dispatch_once, DispatcherConfig, EventPublisher, OutboxPublisher, Routes, SubscriberRegistry,
+    dispatch_subscriber_once, DispatcherConfig, EventPublisher, OutboxPublisher, Routes,
 };
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -29,18 +29,16 @@ async fn register_dispatches_to_account_then_notification(pool: sqlx::PgPool) {
             .add("user.registered", "account.on-user-registered")
             .add("account.created", "notification.on-account-created"),
     ));
-    let mut registry = SubscriberRegistry::new();
-    registry.register(Arc::new(AccountSubscriber::new(
+    let account_sub = Arc::new(AccountSubscriber::new(
         pool.clone(),
         account_repo.clone(),
         publisher.clone(),
-    )));
-    registry.register(Arc::new(NotificationSubscriber::new(
+    ));
+    let notif_sub = Arc::new(NotificationSubscriber::new(
         notif_repo.clone(),
         Arc::new(LogNotifier),
         Arc::new(Templates::new().unwrap()),
-    )));
-    let registry = Arc::new(registry);
+    ));
 
     // Register a user via the auth router (publishes user.registered).
     let auth = domain_auth::ports::http::router(AuthState {
@@ -74,11 +72,11 @@ async fn register_dispatches_to_account_then_notification(pool: sqlx::PgPool) {
     assert_eq!(res.status(), StatusCode::CREATED);
 
     // 1st dispatch: account.on-user-registered creates the account + emits account.created.
-    dispatch_once(&pool, &registry, &DispatcherConfig::default())
+    dispatch_subscriber_once(&pool, account_sub.as_ref(), &DispatcherConfig::default())
         .await
         .unwrap();
     // 2nd dispatch: notification.on-account-created consumes account.created.
-    dispatch_once(&pool, &registry, &DispatcherConfig::default())
+    dispatch_subscriber_once(&pool, notif_sub.as_ref(), &DispatcherConfig::default())
         .await
         .unwrap();
 

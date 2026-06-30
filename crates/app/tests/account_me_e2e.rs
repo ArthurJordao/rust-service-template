@@ -10,7 +10,7 @@ use http_body_util::BodyExt;
 use platform::auth::{JwtVerifier, NoopRevocationChecker};
 use platform::events::dlq_http::DlqState;
 use platform::events::{
-    dispatch_once, DispatcherConfig, EventPublisher, OutboxPublisher, Routes, SubscriberRegistry,
+    dispatch_subscriber_once, DispatcherConfig, EventPublisher, OutboxPublisher, Routes,
 };
 use platform::metrics::Metrics;
 use std::sync::Arc;
@@ -29,13 +29,11 @@ async fn register_dispatch_then_get_my_account(pool: sqlx::PgPool) {
     let publisher: Arc<dyn EventPublisher> = Arc::new(OutboxPublisher::new(
         Routes::new().add("user.registered", "account.on-user-registered"),
     ));
-    let mut registry = SubscriberRegistry::new();
-    registry.register(Arc::new(AccountSubscriber::new(
+    let account_sub = Arc::new(AccountSubscriber::new(
         pool.clone(),
         account_repo.clone(),
         publisher.clone(),
-    )));
-    let registry = Arc::new(registry);
+    ));
 
     let account = AccountState {
         pool: pool.clone(),
@@ -93,7 +91,7 @@ async fn register_dispatch_then_get_my_account(pool: sqlx::PgPool) {
     let access = json["access_token"].as_str().unwrap().to_string();
 
     // Dispatch the user.registered -> account created
-    dispatch_once(&pool, &registry, &DispatcherConfig::default())
+    dispatch_subscriber_once(&pool, account_sub.as_ref(), &DispatcherConfig::default())
         .await
         .unwrap();
 

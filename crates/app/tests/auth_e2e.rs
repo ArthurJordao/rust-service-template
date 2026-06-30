@@ -7,7 +7,7 @@ use domain_auth::auth::jwt::JwtIssuer;
 use domain_auth::ports::http::{router, AuthState};
 use domain_auth::ports::postgres::PostgresUserRepository;
 use platform::events::{
-    dispatch_once, DispatcherConfig, EventPublisher, OutboxPublisher, Routes, SubscriberRegistry,
+    dispatch_subscriber_once, DispatcherConfig, EventPublisher, OutboxPublisher, Routes,
 };
 use platform::metrics::Metrics;
 use std::sync::Arc;
@@ -22,13 +22,11 @@ async fn register_then_dispatch_creates_account(pool: sqlx::PgPool) {
     let publisher: Arc<dyn EventPublisher> = Arc::new(OutboxPublisher::new(
         Routes::new().add("user.registered", "account.on-user-registered"),
     ));
-    let mut registry = SubscriberRegistry::new();
-    registry.register(Arc::new(AccountSubscriber::new(
+    let account_sub = Arc::new(AccountSubscriber::new(
         pool.clone(),
         account_repo.clone(),
         publisher.clone(),
-    )));
-    let registry = Arc::new(registry);
+    ));
 
     let auth_repo = Arc::new(PostgresUserRepository::new(pool.clone()));
     let auth = router(AuthState {
@@ -59,7 +57,7 @@ async fn register_then_dispatch_creates_account(pool: sqlx::PgPool) {
     assert_eq!(res.status(), StatusCode::CREATED);
 
     // 2. Dispatcher delivers it -> account subscriber creates the account.
-    dispatch_once(&pool, &registry, &DispatcherConfig::default())
+    dispatch_subscriber_once(&pool, account_sub.as_ref(), &DispatcherConfig::default())
         .await
         .unwrap();
 

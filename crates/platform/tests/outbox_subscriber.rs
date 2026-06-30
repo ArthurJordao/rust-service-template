@@ -88,10 +88,7 @@ impl Subscriber for AlwaysFails {
 #[sqlx::test(migrations = "../../migrations")]
 async fn failing_delivery_dead_letters_after_max_attempts(pool: sqlx::PgPool) {
     publish(&pool, "1").await;
-    let config = DispatcherConfig {
-        max_attempts: 2,
-        batch_size: 50,
-    };
+    let config = DispatcherConfig { max_attempts: 2 };
 
     dispatch_subscriber_once(&pool, &AlwaysFails, &config)
         .await

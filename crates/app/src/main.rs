@@ -1,6 +1,6 @@
 use app::state;
 use platform::config::Settings;
-use platform::events::run_dispatcher;
+use platform::events::{run_consumers, DispatcherConfig, ReaperConfig};
 use platform::observability::init_tracing;
 
 #[tokio::main]
@@ -28,8 +28,13 @@ async fn main() -> anyhow::Result<()> {
         web_dist,
     );
 
-    let (pool, registry, dispatcher_cfg, interval) = state::dispatcher_handle(&res);
-    let dispatcher = tokio::spawn(run_dispatcher(pool, registry, dispatcher_cfg, interval));
+    let (pool, registry) = state::consumers_handle(&res);
+    let consumers = tokio::spawn(run_consumers(
+        pool,
+        registry,
+        DispatcherConfig::default(),
+        ReaperConfig::default(),
+    ));
 
     let prune_pool = res.pool.clone();
     let pruner = tokio::spawn(async move {
@@ -49,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::select! {
         r = server => { r?; }
-        _ = dispatcher => { tracing::error!("dispatcher exited unexpectedly"); }
+        _ = consumers => { tracing::error!("consumers exited unexpectedly"); }
         _ = pruner => { tracing::error!("prune task exited unexpectedly"); }
     }
     Ok(())
