@@ -30,6 +30,12 @@ mod tests {
             url: "postgres://localhost/x".into(),
             max_connections: 5,
             auto_migrate: false,
+            min_connections: 1,
+            acquire_timeout_seconds: 5,
+            idle_timeout_seconds: 600,
+            max_lifetime_seconds: 1800,
+            statement_timeout_ms: 10_000,
+            lock_timeout_ms: 5_000,
         };
     }
 }
