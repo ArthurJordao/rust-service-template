@@ -1,11 +1,32 @@
 use crate::config::DatabaseSettings;
 use sqlx::postgres::PgPoolOptions;
+use sqlx::Executor;
+use std::time::Duration;
 
 pub type Db = sqlx::PgPool;
 
 pub async fn make_pool(settings: &DatabaseSettings) -> anyhow::Result<Db> {
+    let statement_timeout_ms = settings.statement_timeout_ms;
+    let lock_timeout_ms = settings.lock_timeout_ms;
     let pool = PgPoolOptions::new()
         .max_connections(settings.max_connections)
+        .min_connections(settings.min_connections)
+        .acquire_timeout(Duration::from_secs(settings.acquire_timeout_seconds))
+        .idle_timeout(Duration::from_secs(settings.idle_timeout_seconds))
+        .max_lifetime(Duration::from_secs(settings.max_lifetime_seconds))
+        .after_connect(move |conn, _meta| {
+            Box::pin(async move {
+                conn.execute(
+                    format!(
+                        "set statement_timeout = '{statement_timeout_ms}'; \
+                         set lock_timeout = '{lock_timeout_ms}';"
+                    )
+                    .as_str(),
+                )
+                .await?;
+                Ok(())
+            })
+        })
         .connect(&settings.url)
         .await?;
     Ok(pool)
