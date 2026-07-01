@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::get;
 use axum::Router;
 use domain_account::ports::events::AccountSubscriber;
@@ -24,10 +25,11 @@ use platform::events::{
     dlq_http::{dlq_router, DlqState},
     EventPublisher, OutboxPublisher, Routes, SubscriberRegistry,
 };
-use platform::metrics::Metrics;
+use platform::metrics::{track_metrics, Metrics};
 use platform::observability::correlation_id_middleware;
 use platform::server::{cors_layer, readyz_handler, status_handler};
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::timeout::TimeoutLayer;
 use utoipa_swagger_ui::SwaggerUi;
 
 /// Hardening knobs threaded into `build_router`. Constructed from `ServerSettings`
@@ -258,6 +260,15 @@ pub fn build_router(
     app = app
         .merge(SwaggerUi::new("/swagger-ui").url("/api/openapi.json", crate::openapi::api_doc()));
 
-    app.layer(axum::middleware::from_fn(correlation_id_middleware))
-        .layer(cors_layer(&cfg.cors_origins))
+    app.route_layer(axum::middleware::from_fn_with_state(
+        metrics.clone(),
+        track_metrics,
+    ))
+    .layer(DefaultBodyLimit::max(cfg.max_body_bytes))
+    .layer(TimeoutLayer::with_status_code(
+        axum::http::StatusCode::REQUEST_TIMEOUT,
+        cfg.request_timeout,
+    ))
+    .layer(axum::middleware::from_fn(correlation_id_middleware))
+    .layer(cors_layer(&cfg.cors_origins))
 }
