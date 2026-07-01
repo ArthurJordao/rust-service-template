@@ -55,7 +55,16 @@ fn build(pool: sqlx::PgPool) -> axum::Router {
         revocation: revocation.clone(),
         metrics: metrics.clone(),
     };
-    app::state::build_router(account, auth, dlq, notification, metrics, &[], None)
+    app::state::build_router(
+        account,
+        auth,
+        dlq,
+        notification,
+        metrics,
+        pool.clone(),
+        app::state::RouterConfig::new(vec![]),
+        None,
+    )
 }
 
 #[sqlx::test(migrations = "../../migrations")]

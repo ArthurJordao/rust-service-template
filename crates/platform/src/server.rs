@@ -1,8 +1,11 @@
+use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use http::StatusCode;
 use serde_json::json;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+
+use crate::db::Db;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -53,6 +56,19 @@ pub async fn status_handler() -> &'static str {
     "OK"
 }
 
+/// Readiness probe: succeeds only if a DB connection can run `select 1`. Returns
+/// 503 otherwise so the platform pulls the instance from rotation. Distinct from
+/// `/status` (liveness), which is a static 200.
+pub async fn readyz_handler(State(pool): State<Db>) -> Response {
+    match sqlx::query("select 1").execute(&pool).await {
+        Ok(_) => (StatusCode::OK, "ready").into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "readiness check failed");
+            (StatusCode::SERVICE_UNAVAILABLE, "not ready").into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,5 +85,18 @@ mod tests {
     fn forbidden_maps_to_403() {
         let res = AppError::Forbidden("no".into()).into_response();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn readyz_returns_503_when_db_unreachable() {
+        // Lazy pool pointed at a closed port: construction succeeds, query fails.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(300))
+            .connect_lazy("postgres://127.0.0.1:1/none")
+            .expect("lazy pool");
+        let res = super::readyz_handler(axum::extract::State(pool))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

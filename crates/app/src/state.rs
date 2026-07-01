@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use axum::routing::get;
@@ -25,9 +26,31 @@ use platform::events::{
 };
 use platform::metrics::Metrics;
 use platform::observability::correlation_id_middleware;
-use platform::server::{cors_layer, status_handler};
+use platform::server::{cors_layer, readyz_handler, status_handler};
 use tower_http::services::{ServeDir, ServeFile};
 use utoipa_swagger_ui::SwaggerUi;
+
+/// Hardening knobs threaded into `build_router`. Constructed from `ServerSettings`
+/// in `main`; defaults match the production defaults so tests can use `new`.
+pub struct RouterConfig {
+    pub cors_origins: Vec<String>,
+    pub request_timeout: Duration,
+    pub max_body_bytes: usize,
+    pub auth_rate_limit_per_minute: u32,
+    pub auth_rate_limit_burst: u32,
+}
+
+impl RouterConfig {
+    pub fn new(cors_origins: Vec<String>) -> RouterConfig {
+        RouterConfig {
+            cors_origins,
+            request_timeout: Duration::from_secs(30),
+            max_body_bytes: 1_048_576,
+            auth_rate_limit_per_minute: 10,
+            auth_rate_limit_burst: 5,
+        }
+    }
+}
 
 /// All shared resources, constructed once at startup.
 pub struct Resources {
@@ -187,13 +210,15 @@ async fn spa_status_fixup(
 
 /// Assemble the full application router: API under `/api`, infra at root, and an
 /// optional static SPA fallback. Pure (no I/O) so it is unit-testable.
+#[allow(clippy::too_many_arguments)]
 pub fn build_router(
     account: AccountState,
     auth: AuthState,
     dlq: DlqState,
     notification: NotificationState,
     metrics: Metrics,
-    cors_origins: &[String],
+    db: Db,
+    cfg: RouterConfig,
     web_dist: Option<PathBuf>,
 ) -> Router {
     let api = domain_account::router(account)
@@ -204,6 +229,7 @@ pub fn build_router(
     let metrics_for_handler = metrics.clone();
     let mut app = Router::new()
         .route("/status", get(status_handler))
+        .route("/readyz", get(readyz_handler).with_state(db))
         .route(
             "/metrics",
             get(move || {
@@ -233,5 +259,5 @@ pub fn build_router(
         .merge(SwaggerUi::new("/swagger-ui").url("/api/openapi.json", crate::openapi::api_doc()));
 
     app.layer(axum::middleware::from_fn(correlation_id_middleware))
-        .layer(cors_layer(cors_origins))
+        .layer(cors_layer(&cfg.cors_origins))
 }

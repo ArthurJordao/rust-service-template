@@ -69,7 +69,16 @@ async fn cid_lineage_grows_through_the_event_chain(pool: sqlx::PgPool) {
         revocation: revocation.clone(),
         metrics: metrics.clone(),
     };
-    let app = app::state::build_router(account, auth, dlq, notification, metrics, &[], None);
+    let app = app::state::build_router(
+        account,
+        auth,
+        dlq,
+        notification,
+        metrics,
+        pool.clone(),
+        app::state::RouterConfig::new(vec![]),
+        None,
+    );
 
     // Register with an explicit root cid.
     let res = app

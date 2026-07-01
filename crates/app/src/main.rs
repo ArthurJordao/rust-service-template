@@ -18,13 +18,21 @@ async fn main() -> anyhow::Result<()> {
     let web_dist = std::path::Path::new("web/dist");
     let web_dist = web_dist.exists().then(|| web_dist.to_path_buf());
 
+    let mut router_cfg = state::RouterConfig::new(res.settings.cors_allowed_origins.clone());
+    router_cfg.request_timeout =
+        std::time::Duration::from_secs(res.settings.server.request_timeout_seconds);
+    router_cfg.max_body_bytes = res.settings.server.max_body_bytes;
+    router_cfg.auth_rate_limit_per_minute = res.settings.server.auth_rate_limit_per_minute;
+    router_cfg.auth_rate_limit_burst = res.settings.server.auth_rate_limit_burst;
+
     let app = state::build_router(
         state::account_state(&res),
         state::auth_state(&res),
         state::dlq_state(&res),
         state::notification_state(&res),
         res.metrics.clone(),
-        &res.settings.cors_allowed_origins,
+        res.pool.clone(),
+        router_cfg,
         web_dist,
     );
 
