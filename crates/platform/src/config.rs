@@ -227,14 +227,26 @@ mod tests {
 
     #[test]
     fn server_and_db_settings_have_production_defaults() {
-        std::env::set_var("APP__SERVER__PORT", "8080");
-        std::env::set_var("APP__SERVER__ENVIRONMENT", "test");
-        std::env::set_var("APP__DATABASE__URL", "postgres://localhost/x");
-        std::env::set_var("APP__DATABASE__MAX_CONNECTIONS", "5");
-        std::env::set_var("APP__DATABASE__AUTO_MIGRATE", "false");
-        std::env::set_var("APP__AUTH__JWT_PUBLIC_KEY_PEM", "PEM");
+        // Build from an in-memory source (no global env) so this test is
+        // deterministic and safe to run in parallel with `loads_settings_from_env`.
+        let s: Settings = config::Config::builder()
+            .set_override("server.port", 8080)
+            .unwrap()
+            .set_override("server.environment", "test")
+            .unwrap()
+            .set_override("database.url", "postgres://localhost/x")
+            .unwrap()
+            .set_override("database.max_connections", 5)
+            .unwrap()
+            .set_override("database.auto_migrate", false)
+            .unwrap()
+            .set_override("auth.jwt_public_key_pem", "PEM")
+            .unwrap()
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
 
-        let s = Settings::load().expect("settings load");
         assert_eq!(s.server.request_timeout_seconds, 30);
         assert_eq!(s.server.max_body_bytes, 1_048_576);
         assert_eq!(s.server.auth_rate_limit_per_minute, 10);
