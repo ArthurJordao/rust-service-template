@@ -70,7 +70,16 @@ async fn register_dispatch_then_get_my_account(pool: sqlx::PgPool) {
         revocation: revocation.clone(),
         metrics: metrics.clone(),
     };
-    let app = app::state::build_router(account, auth, dlq, notification, metrics, &[], None);
+    let app = app::state::build_router(
+        account,
+        auth,
+        dlq,
+        notification,
+        metrics,
+        pool.clone(),
+        app::state::RouterConfig::new(vec![]),
+        None,
+    );
 
     // Register -> tokens
     let reg = app

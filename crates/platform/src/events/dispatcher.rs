@@ -3,6 +3,7 @@ use crate::events::{DeliveredEvent, Subscriber, SubscriberRegistry};
 use futures::stream::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 #[derive(Debug, Clone)]
@@ -225,11 +226,16 @@ pub async fn run_subscriber_loop(
     pool: Db,
     subscriber: Arc<dyn Subscriber>,
     config: DispatcherConfig,
+    shutdown: CancellationToken,
 ) {
     let cfg = subscriber.consumer_config();
     let batch_size = cfg.batch_size as usize;
     tracing::info!(subscriber = subscriber.name(), "consumer loop started");
     loop {
+        if shutdown.is_cancelled() {
+            tracing::info!(subscriber = subscriber.name(), "consumer loop stopping");
+            break;
+        }
         match dispatch_subscriber_once(&pool, subscriber.as_ref(), &config).await {
             Ok(n) if n >= batch_size && batch_size > 0 => continue,
             Ok(_) => {}
@@ -237,7 +243,10 @@ pub async fn run_subscriber_loop(
                 tracing::error!(subscriber = subscriber.name(), error = %e, "dispatch cycle failed")
             }
         }
-        tokio::time::sleep(cfg.poll_interval).await;
+        tokio::select! {
+            _ = shutdown.cancelled() => break,
+            _ = tokio::time::sleep(cfg.poll_interval) => {}
+        }
     }
 }
 
@@ -248,16 +257,27 @@ pub async fn run_consumers(
     registry: Arc<SubscriberRegistry>,
     dispatcher: DispatcherConfig,
     reaper: ReaperConfig,
+    shutdown: CancellationToken,
 ) {
     let max_attempts = dispatcher.max_attempts;
     let mut set = tokio::task::JoinSet::new();
     for sub in registry.subscribers() {
-        set.spawn(run_subscriber_loop(pool.clone(), sub, dispatcher.clone()));
+        set.spawn(run_subscriber_loop(
+            pool.clone(),
+            sub,
+            dispatcher.clone(),
+            shutdown.clone(),
+        ));
     }
-    set.spawn(run_reaper(pool, reaper, max_attempts));
+    set.spawn(run_reaper(pool, reaper, max_attempts, shutdown.clone()));
+
     if let Some(res) = set.join_next().await {
-        tracing::error!(result = ?res, "a consumer task exited unexpectedly");
+        if !shutdown.is_cancelled() {
+            tracing::error!(result = ?res, "a consumer task exited unexpectedly; stopping consumers");
+            shutdown.cancel();
+        }
     }
+    while set.join_next().await.is_some() {}
 }
 
 /// Reclaim deliveries stuck in `processing` past the visibility timeout (worker
@@ -286,14 +306,26 @@ pub async fn reap_stale(
 }
 
 /// Long-running reaper: sweep stale `processing` rows, sleep, repeat.
-pub async fn run_reaper(pool: Db, config: ReaperConfig, max_attempts: i32) {
+pub async fn run_reaper(
+    pool: Db,
+    config: ReaperConfig,
+    max_attempts: i32,
+    shutdown: CancellationToken,
+) {
     tracing::info!("outbox reaper started");
     loop {
+        if shutdown.is_cancelled() {
+            tracing::info!("outbox reaper stopping");
+            break;
+        }
         match reap_stale(&pool, config.visibility_timeout, max_attempts).await {
             Ok(n) if n > 0 => tracing::warn!(reclaimed = n, "reaped stale processing deliveries"),
             Ok(_) => {}
             Err(e) => tracing::error!(error = %e, "reaper sweep failed"),
         }
-        tokio::time::sleep(config.poll_interval).await;
+        tokio::select! {
+            _ = shutdown.cancelled() => break,
+            _ = tokio::time::sleep(config.poll_interval) => {}
+        }
     }
 }

@@ -5,6 +5,14 @@ use serde::Deserialize;
 pub struct ServerSettings {
     pub port: u16,
     pub environment: String,
+    #[serde(default = "default_request_timeout_seconds")]
+    pub request_timeout_seconds: u64,
+    #[serde(default = "default_max_body_bytes")]
+    pub max_body_bytes: usize,
+    #[serde(default = "default_auth_rate_limit_per_minute")]
+    pub auth_rate_limit_per_minute: u32,
+    #[serde(default = "default_auth_rate_limit_burst")]
+    pub auth_rate_limit_burst: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -12,6 +20,49 @@ pub struct DatabaseSettings {
     pub url: String,
     pub max_connections: u32,
     pub auto_migrate: bool,
+    #[serde(default = "default_min_connections")]
+    pub min_connections: u32,
+    #[serde(default = "default_acquire_timeout_seconds")]
+    pub acquire_timeout_seconds: u64,
+    #[serde(default = "default_idle_timeout_seconds")]
+    pub idle_timeout_seconds: u64,
+    #[serde(default = "default_max_lifetime_seconds")]
+    pub max_lifetime_seconds: u64,
+    #[serde(default = "default_statement_timeout_ms")]
+    pub statement_timeout_ms: u64,
+    #[serde(default = "default_lock_timeout_ms")]
+    pub lock_timeout_ms: u64,
+}
+
+fn default_request_timeout_seconds() -> u64 {
+    30
+}
+fn default_max_body_bytes() -> usize {
+    1_048_576
+}
+fn default_auth_rate_limit_per_minute() -> u32 {
+    10
+}
+fn default_auth_rate_limit_burst() -> u32 {
+    5
+}
+fn default_min_connections() -> u32 {
+    1
+}
+fn default_acquire_timeout_seconds() -> u64 {
+    5
+}
+fn default_idle_timeout_seconds() -> u64 {
+    600
+}
+fn default_max_lifetime_seconds() -> u64 {
+    1800
+}
+fn default_statement_timeout_ms() -> u64 {
+    10_000
+}
+fn default_lock_timeout_ms() -> u64 {
+    5_000
 }
 
 fn default_access_ttl() -> i64 {
@@ -172,5 +223,39 @@ mod tests {
         let s = auth("INLINE", path.to_str().unwrap());
         assert_eq!(s.public_key_pem().unwrap(), "FROM_FILE");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn server_and_db_settings_have_production_defaults() {
+        // Build from an in-memory source (no global env) so this test is
+        // deterministic and safe to run in parallel with `loads_settings_from_env`.
+        let s: Settings = config::Config::builder()
+            .set_override("server.port", 8080)
+            .unwrap()
+            .set_override("server.environment", "test")
+            .unwrap()
+            .set_override("database.url", "postgres://localhost/x")
+            .unwrap()
+            .set_override("database.max_connections", 5)
+            .unwrap()
+            .set_override("database.auto_migrate", false)
+            .unwrap()
+            .set_override("auth.jwt_public_key_pem", "PEM")
+            .unwrap()
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        assert_eq!(s.server.request_timeout_seconds, 30);
+        assert_eq!(s.server.max_body_bytes, 1_048_576);
+        assert_eq!(s.server.auth_rate_limit_per_minute, 10);
+        assert_eq!(s.server.auth_rate_limit_burst, 5);
+        assert_eq!(s.database.min_connections, 1);
+        assert_eq!(s.database.acquire_timeout_seconds, 5);
+        assert_eq!(s.database.idle_timeout_seconds, 600);
+        assert_eq!(s.database.max_lifetime_seconds, 1800);
+        assert_eq!(s.database.statement_timeout_ms, 10_000);
+        assert_eq!(s.database.lock_timeout_ms, 5_000);
     }
 }

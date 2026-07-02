@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::get;
 use axum::Router;
 use domain_account::ports::events::AccountSubscriber;
@@ -16,6 +18,7 @@ use domain_notification::ports::notifier::LogNotifier;
 use domain_notification::ports::postgres::PostgresSentNotificationRepository;
 use domain_notification::ports::templates::Templates;
 use domain_notification::NotificationState;
+use governor::middleware::NoOpMiddleware;
 use platform::auth::{JwtVerifier, RevocationChecker};
 use platform::config::Settings;
 use platform::db::{self, Db};
@@ -23,11 +26,86 @@ use platform::events::{
     dlq_http::{dlq_router, DlqState},
     EventPublisher, OutboxPublisher, Routes, SubscriberRegistry,
 };
-use platform::metrics::Metrics;
+use platform::metrics::{track_metrics, Metrics};
 use platform::observability::correlation_id_middleware;
-use platform::server::{cors_layer, status_handler};
+use platform::server::{cors_layer, readyz_handler, status_handler};
+use tower_governor::governor::GovernorConfigBuilder;
+use tower_governor::key_extractor::KeyExtractor;
+use tower_governor::{GovernorError, GovernorLayer};
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::timeout::TimeoutLayer;
 use utoipa_swagger_ui::SwaggerUi;
+
+/// Hardening knobs threaded into `build_router`. Constructed from `ServerSettings`
+/// in `main`; defaults match the production defaults so tests can use `new`.
+pub struct RouterConfig {
+    pub cors_origins: Vec<String>,
+    pub request_timeout: Duration,
+    pub max_body_bytes: usize,
+    pub auth_rate_limit_per_minute: u32,
+    pub auth_rate_limit_burst: u32,
+}
+
+impl RouterConfig {
+    pub fn new(cors_origins: Vec<String>) -> RouterConfig {
+        RouterConfig {
+            cors_origins,
+            request_timeout: Duration::from_secs(30),
+            max_body_bytes: 1_048_576,
+            auth_rate_limit_per_minute: 10,
+            auth_rate_limit_burst: 5,
+        }
+    }
+}
+
+/// Rate-limit key = real client IP. Behind Fly's proxy the socket peer is the
+/// proxy, so read `Fly-Client-IP`, then the leftmost `X-Forwarded-For`, else a
+/// shared fallback bucket.
+#[derive(Clone)]
+pub struct FlyClientIpKeyExtractor;
+
+impl KeyExtractor for FlyClientIpKeyExtractor {
+    type Key = String;
+
+    fn extract<T>(&self, req: &http::Request<T>) -> Result<Self::Key, GovernorError> {
+        let h = req.headers();
+        let ip = h
+            .get("fly-client-ip")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                h.get("x-forwarded-for")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.split(',').next())
+                    .map(|s| s.trim().to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        Ok(ip)
+    }
+}
+
+/// A per-IP rate-limit layer: `per_minute` cells refill over a minute, with
+/// `burst` capacity. Built for the auth sub-router.
+///
+/// NOTE: buckets are in-memory and per-process (not shared across horizontally-scaled
+/// instances), and are not garbage-collected — memory grows with distinct client IPs
+/// over the process lifetime (bounded in practice by instance recycling on deploys).
+/// For global/GC'd limiting, layer an edge/proxy limiter or a shared store on top.
+pub fn governor_layer(
+    per_minute: u32,
+    burst: u32,
+) -> GovernorLayer<FlyClientIpKeyExtractor, NoOpMiddleware> {
+    let period_ms = (60_000 / per_minute.max(1)) as u64;
+    let conf = GovernorConfigBuilder::default()
+        .period(std::time::Duration::from_millis(period_ms))
+        .burst_size(burst.max(1))
+        .key_extractor(FlyClientIpKeyExtractor)
+        .finish()
+        .expect("valid governor config");
+    GovernorLayer {
+        config: Arc::new(conf),
+    }
+}
 
 /// All shared resources, constructed once at startup.
 pub struct Resources {
@@ -187,23 +265,30 @@ async fn spa_status_fixup(
 
 /// Assemble the full application router: API under `/api`, infra at root, and an
 /// optional static SPA fallback. Pure (no I/O) so it is unit-testable.
+#[allow(clippy::too_many_arguments)]
 pub fn build_router(
     account: AccountState,
     auth: AuthState,
     dlq: DlqState,
     notification: NotificationState,
     metrics: Metrics,
-    cors_origins: &[String],
+    db: Db,
+    cfg: RouterConfig,
     web_dist: Option<PathBuf>,
 ) -> Router {
+    let auth_routes = domain_auth::router(auth).layer(governor_layer(
+        cfg.auth_rate_limit_per_minute,
+        cfg.auth_rate_limit_burst,
+    ));
     let api = domain_account::router(account)
-        .merge(domain_auth::router(auth))
+        .merge(auth_routes)
         .merge(dlq_router(dlq))
         .merge(domain_notification::router(notification));
 
     let metrics_for_handler = metrics.clone();
     let mut app = Router::new()
         .route("/status", get(status_handler))
+        .route("/readyz", get(readyz_handler).with_state(db))
         .route(
             "/metrics",
             get(move || {
@@ -232,6 +317,21 @@ pub fn build_router(
     app = app
         .merge(SwaggerUi::new("/swagger-ui").url("/api/openapi.json", crate::openapi::api_doc()));
 
-    app.layer(axum::middleware::from_fn(correlation_id_middleware))
-        .layer(cors_layer(cors_origins))
+    // Layer order (outermost last): CORS is outermost so even rejected responses
+    // (408/413/429) carry CORS headers for browser clients; correlation_id sits just
+    // inside it so those same responses still get a cid stamped on the way out;
+    // timeout + body-limit + metrics are innermost. track_metrics is a route_layer so
+    // it labels by matched-path template and leaves the SPA fallback unmetered.
+    // (Note: 408/413 short-circuit outside track_metrics and are intentionally unmetered.)
+    app.route_layer(axum::middleware::from_fn_with_state(
+        metrics.clone(),
+        track_metrics,
+    ))
+    .layer(DefaultBodyLimit::max(cfg.max_body_bytes))
+    .layer(TimeoutLayer::with_status_code(
+        axum::http::StatusCode::REQUEST_TIMEOUT,
+        cfg.request_timeout,
+    ))
+    .layer(axum::middleware::from_fn(correlation_id_middleware))
+    .layer(cors_layer(&cfg.cors_origins))
 }
