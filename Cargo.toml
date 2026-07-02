@@ -36,3 +36,8 @@ utoipa-swagger-ui = { version = "8", features = ["axum"] }
 tower_governor = "0.4"
 governor = "0.6"
 tokio-util = "0.7"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
