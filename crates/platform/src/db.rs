@@ -16,6 +16,9 @@ pub async fn make_pool(settings: &DatabaseSettings) -> anyhow::Result<Db> {
         .max_lifetime(Duration::from_secs(settings.max_lifetime_seconds))
         .after_connect(move |conn, _meta| {
             Box::pin(async move {
+                // Both SETs in one string: sqlx sends a parameterless query via the
+                // simple-query protocol, which allows multiple statements. (Don't switch
+                // this to query!/prepared statements — those disallow multi-statement.)
                 conn.execute(
                     format!(
                         "set statement_timeout = '{statement_timeout_ms}'; \

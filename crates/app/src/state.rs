@@ -86,6 +86,11 @@ impl KeyExtractor for FlyClientIpKeyExtractor {
 
 /// A per-IP rate-limit layer: `per_minute` cells refill over a minute, with
 /// `burst` capacity. Built for the auth sub-router.
+///
+/// NOTE: buckets are in-memory and per-process (not shared across horizontally-scaled
+/// instances), and are not garbage-collected — memory grows with distinct client IPs
+/// over the process lifetime (bounded in practice by instance recycling on deploys).
+/// For global/GC'd limiting, layer an edge/proxy limiter or a shared store on top.
 pub fn governor_layer(
     per_minute: u32,
     burst: u32,
@@ -312,6 +317,12 @@ pub fn build_router(
     app = app
         .merge(SwaggerUi::new("/swagger-ui").url("/api/openapi.json", crate::openapi::api_doc()));
 
+    // Layer order (outermost last): CORS is outermost so even rejected responses
+    // (408/413/429) carry CORS headers for browser clients; correlation_id sits just
+    // inside it so those same responses still get a cid stamped on the way out;
+    // timeout + body-limit + metrics are innermost. track_metrics is a route_layer so
+    // it labels by matched-path template and leaves the SPA fallback unmetered.
+    // (Note: 408/413 short-circuit outside track_metrics and are intentionally unmetered.)
     app.route_layer(axum::middleware::from_fn_with_state(
         metrics.clone(),
         track_metrics,
