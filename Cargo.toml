@@ -35,3 +35,4 @@ utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "8", features = ["axum"] }
 tower_governor = "0.4"
 governor = "0.6"
+tokio-util = "0.7"

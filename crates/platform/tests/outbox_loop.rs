@@ -7,6 +7,7 @@ use std::sync::{
     Arc,
 };
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 struct FastRecorder(Arc<AtomicUsize>);
 #[async_trait::async_trait]
@@ -54,6 +55,7 @@ async fn loop_drains_pending(pool: sqlx::PgPool) {
         pool.clone(),
         sub,
         DispatcherConfig::default(),
+        CancellationToken::new(),
     ));
 
     // Poll up to ~3s for the loop to process the one delivery.
