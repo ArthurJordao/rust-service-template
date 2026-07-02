@@ -18,6 +18,7 @@ use domain_notification::ports::notifier::LogNotifier;
 use domain_notification::ports::postgres::PostgresSentNotificationRepository;
 use domain_notification::ports::templates::Templates;
 use domain_notification::NotificationState;
+use governor::middleware::NoOpMiddleware;
 use platform::auth::{JwtVerifier, RevocationChecker};
 use platform::config::Settings;
 use platform::db::{self, Db};
@@ -28,6 +29,9 @@ use platform::events::{
 use platform::metrics::{track_metrics, Metrics};
 use platform::observability::correlation_id_middleware;
 use platform::server::{cors_layer, readyz_handler, status_handler};
+use tower_governor::governor::GovernorConfigBuilder;
+use tower_governor::key_extractor::KeyExtractor;
+use tower_governor::{GovernorError, GovernorLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::timeout::TimeoutLayer;
 use utoipa_swagger_ui::SwaggerUi;
@@ -51,6 +55,50 @@ impl RouterConfig {
             auth_rate_limit_per_minute: 10,
             auth_rate_limit_burst: 5,
         }
+    }
+}
+
+/// Rate-limit key = real client IP. Behind Fly's proxy the socket peer is the
+/// proxy, so read `Fly-Client-IP`, then the leftmost `X-Forwarded-For`, else a
+/// shared fallback bucket.
+#[derive(Clone)]
+pub struct FlyClientIpKeyExtractor;
+
+impl KeyExtractor for FlyClientIpKeyExtractor {
+    type Key = String;
+
+    fn extract<T>(&self, req: &http::Request<T>) -> Result<Self::Key, GovernorError> {
+        let h = req.headers();
+        let ip = h
+            .get("fly-client-ip")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                h.get("x-forwarded-for")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.split(',').next())
+                    .map(|s| s.trim().to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        Ok(ip)
+    }
+}
+
+/// A per-IP rate-limit layer: `per_minute` cells refill over a minute, with
+/// `burst` capacity. Built for the auth sub-router.
+pub fn governor_layer(
+    per_minute: u32,
+    burst: u32,
+) -> GovernorLayer<FlyClientIpKeyExtractor, NoOpMiddleware> {
+    let period_ms = (60_000 / per_minute.max(1)) as u64;
+    let conf = GovernorConfigBuilder::default()
+        .period(std::time::Duration::from_millis(period_ms))
+        .burst_size(burst.max(1))
+        .key_extractor(FlyClientIpKeyExtractor)
+        .finish()
+        .expect("valid governor config");
+    GovernorLayer {
+        config: Arc::new(conf),
     }
 }
 
@@ -223,8 +271,12 @@ pub fn build_router(
     cfg: RouterConfig,
     web_dist: Option<PathBuf>,
 ) -> Router {
+    let auth_routes = domain_auth::router(auth).layer(governor_layer(
+        cfg.auth_rate_limit_per_minute,
+        cfg.auth_rate_limit_burst,
+    ));
     let api = domain_account::router(account)
-        .merge(domain_auth::router(auth))
+        .merge(auth_routes)
         .merge(dlq_router(dlq))
         .merge(domain_notification::router(notification));
 
