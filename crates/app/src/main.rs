@@ -10,6 +10,10 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     init_tracing("info");
+    tracing::info!(
+        build_sha = %std::env::var("APP_BUILD_SHA").unwrap_or_default(),
+        "starting app"
+    );
     let settings = Settings::load()?;
 
     let res = state::build_resources(settings).await?;
