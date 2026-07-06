@@ -49,5 +49,5 @@ gen-keys:
 
 .PHONY: gen-api
 gen-api:
-	cargo run --quiet -p app --bin openapi-gen > web/openapi.json
+	cargo run --quiet --locked -p app --bin openapi-gen > web/openapi.json
 	npm --prefix web exec -- openapi-typescript web/openapi.json -o web/src/api/schema.d.ts

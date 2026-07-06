@@ -2,10 +2,11 @@
 app = "rust-service-template"       # change me
 primary_region = "gru"              # change me
 
-# SIGTERM grace must exceed the app's ~10s bounded shutdown drain (Spec 1),
-# or Fly would SIGKILL mid-drain (its default kill_timeout is 5s).
+# SIGTERM grace must cover the worst-case shutdown: the HTTP graceful-drain of
+# in-flight requests (bounded by the 30s request timeout) followed by the ~10s
+# bounded await of background tasks (outbox consumers/reaper). 45s > 30s + 10s.
 kill_signal  = "SIGTERM"
-kill_timeout = "15s"
+kill_timeout = "45s"
 
 [build]
 dockerfile = "Dockerfile"
