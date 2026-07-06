@@ -1,0 +1,34 @@
+# Fly.io config. Change `app` and `primary_region` for your deployment.
+app = "rust-service-template"       # change me
+primary_region = "gru"              # change me
+
+# SIGTERM grace must exceed the app's ~10s bounded shutdown drain (Spec 1),
+# or Fly would SIGKILL mid-drain (its default kill_timeout is 5s).
+kill_signal  = "SIGTERM"
+kill_timeout = "15s"
+
+[build]
+dockerfile = "Dockerfile"
+
+[deploy]
+# Runs the migrate bin in a one-off machine before the new release serves.
+release_command = "/app/migrate"
+
+[env]
+APP__SERVER__PORT = "8080"
+APP__SERVER__ENVIRONMENT = "production"
+APP__DATABASE__AUTO_MIGRATE = "false"
+
+[http_service]
+internal_port = 8080
+force_https = true
+auto_stop_machines = true
+auto_start_machines = true
+min_machines_running = 1
+
+[[http_service.checks]]
+method = "GET"
+path = "/readyz"
+interval = "10s"
+timeout = "2s"
+grace_period = "5s"
