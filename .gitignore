@@ -1,7 +1,7 @@
 /target
 **/target
-Cargo.lock
 .env
+secrets/
 
 # Superpowers SDD scratch (briefs, reports, review diffs, ledger)
 .superpowers/

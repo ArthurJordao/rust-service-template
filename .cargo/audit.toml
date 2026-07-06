@@ -1,0 +1,11 @@
+# cargo-audit configuration (read by `cargo audit` and the CI audit job).
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — `rsa` crate Marvin timing sidechannel. No upstream patch
+    # exists. `rsa` is not reachable from any enabled feature/target in this
+    # workspace (`cargo tree -i rsa` is empty); it is a transitive lockfile entry
+    # only. RS256 JWT signing/verification in this service uses `jsonwebtoken`
+    # (backed by `ring`), NOT the `rsa` crate. Re-evaluate if a patch ships or if
+    # `rsa` ever becomes reachable in the compiled binary.
+    "RUSTSEC-2023-0071",
+]
