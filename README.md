@@ -48,3 +48,29 @@ routes, and `web/src/api/types.ts` aliases the generated schemas.
 ## Add a domain
 
     make new-domain name=billing
+
+## Deploy to Fly.io
+
+CI (GitHub Actions) runs the quality gates and builds the image, but does not
+deploy — deploy is a manual step.
+
+1. **Generate real JWT keys** (never use the committed test fixtures in prod):
+   ```bash
+   make gen-keys   # writes secrets/jwt_{private,public}.pem (gitignored)
+   ```
+2. **Create the app and set secrets** (non-secret config lives in `fly.toml`):
+   ```bash
+   fly apps create <your-app>          # then set app = "<your-app>" in fly.toml
+   fly secrets set \
+     APP__DATABASE__URL="postgres://..." \
+     APP__AUTH__JWT_PRIVATE_KEY_PEM="$(cat secrets/jwt_private.pem)" \
+     APP__AUTH__JWT_PUBLIC_KEY_PEM="$(cat secrets/jwt_public.pem)" \
+     APP__AUTH__ADMIN_EMAILS="you@example.com"
+   ```
+   `APP__DATABASE__AUTO_MIGRATE` is `false` in prod (see `fly.toml`); the
+   `release_command` (`/app/migrate`) applies migrations on each deploy.
+3. **Validate and deploy:**
+   ```bash
+   fly config validate
+   fly deploy
+   ```
