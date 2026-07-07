@@ -50,6 +50,7 @@ mod tests {
             jti: "test-jti".into(),
             email: None,
             token_type: "user".into(),
+            amr: vec![],
         }
     }
 

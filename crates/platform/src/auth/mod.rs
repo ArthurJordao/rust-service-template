@@ -17,6 +17,8 @@ pub struct AccessClaims {
     pub email: Option<String>,
     #[serde(rename = "type", default)]
     pub token_type: String,
+    #[serde(default)]
+    pub amr: Vec<String>,
 }
 
 impl AccessClaims {
@@ -124,6 +126,7 @@ mod tests {
             jti: "test-jti".into(),
             email: None,
             token_type: "user".into(),
+            amr: vec![],
         }
     }
 

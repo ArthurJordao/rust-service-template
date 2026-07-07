@@ -36,6 +36,7 @@ fn bearer(issuer: &JwtIssuer, scopes: &[&str]) -> String {
             1,
             "admin@x.y",
             scopes.iter().map(|s| s.to_string()).collect(),
+            vec!["pwd".into()],
             chrono::Utc::now(),
         )
         .unwrap();

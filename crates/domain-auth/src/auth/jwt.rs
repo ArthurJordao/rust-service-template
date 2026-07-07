@@ -46,6 +46,7 @@ impl JwtIssuer {
         user_id: i64,
         email: &str,
         scopes: Vec<String>,
+        amr: Vec<String>,
         now: DateTime<Utc>,
     ) -> anyhow::Result<(String, AccessClaims)> {
         let exp = (now + Duration::seconds(self.access_ttl_seconds)).timestamp() as usize;
@@ -57,6 +58,7 @@ impl JwtIssuer {
             jti: uuid::Uuid::new_v4().to_string(),
             email: Some(email.to_string()),
             token_type: "user".to_string(),
+            amr,
         };
         let token = encode(&Header::new(Algorithm::RS256), &claims, &self.key)?;
         Ok((token, claims))
@@ -80,6 +82,46 @@ impl JwtIssuer {
         let token = encode(&Header::new(Algorithm::RS256), &claims, &self.key)?;
         Ok((jti, token, expires_at))
     }
+
+    /// Short-lived (5 min) single-purpose token gating the next MFA step.
+    pub fn issue_mfa_token(
+        &self,
+        user_id: i64,
+        purpose: MfaPurpose,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<String> {
+        let claims = MfaTokenClaims {
+            sub: format!("user-{user_id}"),
+            iat: now.timestamp() as usize,
+            exp: (now + Duration::minutes(5)).timestamp() as usize,
+            token_type: purpose.token_type().to_string(),
+        };
+        Ok(encode(&Header::new(Algorithm::RS256), &claims, &self.key)?)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MfaPurpose {
+    Pending,
+    Enroll,
+}
+
+impl MfaPurpose {
+    fn token_type(self) -> &'static str {
+        match self {
+            MfaPurpose::Pending => "mfa_pending",
+            MfaPurpose::Enroll => "mfa_enroll",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MfaTokenClaims {
+    pub sub: String,
+    pub iat: usize,
+    pub exp: usize,
+    #[serde(rename = "type")]
+    pub token_type: String,
 }
 
 #[cfg(test)]
@@ -95,7 +137,7 @@ mod tests {
         let issuer = JwtIssuer::from_rsa_pem(TEST_PRIV_PEM, 900, 7).unwrap();
         let now = chrono::Utc::now();
         let (token, claims) = issuer
-            .issue_access(42, "a@b.c", vec!["admin".into()], now)
+            .issue_access(42, "a@b.c", vec!["admin".into()], vec!["pwd".into()], now)
             .unwrap();
         assert_eq!(claims.sub, "user-42");
         assert_eq!(claims.token_type, "user");
@@ -116,5 +158,32 @@ mod tests {
         assert!(!jti.is_empty());
         assert!(!token.is_empty());
         assert!(expires_at > now);
+    }
+
+    #[test]
+    fn access_token_carries_amr() {
+        let issuer = JwtIssuer::from_rsa_pem(TEST_PRIV_PEM, 900, 7).unwrap();
+        let (_t, claims) = issuer
+            .issue_access(
+                1,
+                "a@b.c",
+                vec![],
+                vec!["pwd".into(), "totp".into()],
+                chrono::Utc::now(),
+            )
+            .unwrap();
+        assert_eq!(claims.amr, vec!["pwd".to_string(), "totp".to_string()]);
+    }
+
+    #[test]
+    fn mfa_token_has_purpose_type() {
+        let issuer = JwtIssuer::from_rsa_pem(TEST_PRIV_PEM, 900, 7).unwrap();
+        let token = issuer
+            .issue_mfa_token(1, MfaPurpose::Enroll, chrono::Utc::now())
+            .unwrap();
+        let verifier = JwtVerifier::from_rsa_pem(TEST_PUB_PEM).unwrap();
+        let claims: MfaTokenClaims = verifier.decode(&token).unwrap();
+        assert_eq!(claims.token_type, "mfa_enroll");
+        assert_eq!(claims.sub, "user-1");
     }
 }

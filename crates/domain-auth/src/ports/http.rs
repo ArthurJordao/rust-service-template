@@ -65,7 +65,11 @@ pub fn router(state: AuthState) -> Router {
 }
 
 /// Build access + refresh tokens for a user (refresh persistence arrives in 2b).
-pub async fn issue_token_pair(state: &AuthState, user: &User) -> Result<AuthTokens, AppError> {
+pub async fn issue_token_pair(
+    state: &AuthState,
+    user: &User,
+    amr: Vec<String>,
+) -> Result<AuthTokens, AppError> {
     let db_scopes = state
         .users
         .scope_names(user.id)
@@ -75,7 +79,7 @@ pub async fn issue_token_pair(state: &AuthState, user: &User) -> Result<AuthToke
     let now = chrono::Utc::now();
     let (access_token, _claims) = state
         .issuer
-        .issue_access(user.id, &user.email, scopes, now)
+        .issue_access(user.id, &user.email, scopes, amr, now)
         .map_err(AppError::Internal)?;
     let (jti, refresh_token, refresh_exp) = state
         .issuer
@@ -124,7 +128,7 @@ pub(crate) async fn register(
     .await
     .map_err(AppError::Internal)?;
     tracing::info!(email = %user.email, user_id = user.id, "user registered");
-    let tokens = issue_token_pair(&state, &user).await?;
+    let tokens = issue_token_pair(&state, &user, vec!["pwd".into()]).await?;
     Ok((StatusCode::CREATED, Json(tokens)))
 }
 
@@ -147,7 +151,7 @@ pub(crate) async fn login(
         }
     };
     tracing::info!(email = %user.email, "login succeeded");
-    let tokens = issue_token_pair(&state, &user).await?;
+    let tokens = issue_token_pair(&state, &user, vec!["pwd".into()]).await?;
     Ok(Json(tokens))
 }
 
@@ -189,7 +193,7 @@ pub(crate) async fn refresh(
     let now = chrono::Utc::now();
     let (access_token, _claims) = state
         .issuer
-        .issue_access(user.id, &user.email, scopes, now)
+        .issue_access(user.id, &user.email, scopes, vec!["pwd".into()], now)
         .map_err(AppError::Internal)?;
     Ok(Json(AuthTokens {
         access_token,

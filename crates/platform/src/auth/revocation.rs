@@ -31,6 +31,7 @@ mod tests {
             jti: "j".into(),
             email: None,
             token_type: "user".into(),
+            amr: vec![],
         }
     }
 
