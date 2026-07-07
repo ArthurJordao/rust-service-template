@@ -26,6 +26,7 @@ http.workspace = true
 utoipa.workspace = true
 futures.workspace = true
 tokio-util.workspace = true
+base32.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

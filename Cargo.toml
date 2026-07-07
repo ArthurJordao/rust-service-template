@@ -38,6 +38,9 @@ utoipa-swagger-ui = { version = "8", features = ["axum"] }
 tower_governor = "0.4"
 governor = "0.6"
 tokio-util = "0.7"
+totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
+chacha20poly1305 = "0.10"
+base32 = "0.5"
 
 [profile.release]
 lto = "thin"
