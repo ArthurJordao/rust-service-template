@@ -39,6 +39,12 @@ fn build(pool: sqlx::PgPool) -> axum::Router {
         revocation: revocation.clone(),
         admin_emails: Arc::new(vec![]),
         metrics: metrics.clone(),
+        mfa: user_repo.clone(),
+        mfa_verifier: Arc::new(domain_auth::auth::totp::TotpVerifier::new("test".into())),
+        mfa_config: domain_auth::ports::http::MfaConfig {
+            policy: platform::config::MfaPolicy::Off,
+            cipher: None,
+        },
     };
     let dlq = DlqState {
         pool: pool.clone(),

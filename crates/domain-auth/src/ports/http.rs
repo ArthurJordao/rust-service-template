@@ -1,6 +1,8 @@
 use crate::auth::jwt::JwtIssuer;
 use crate::auth::jwt::RefreshClaims;
+use crate::auth::mfa_crypto::MfaCipher;
 use crate::auth::password::hash_password;
+use crate::auth::totp::FactorVerifier;
 use crate::domain::{check_credentials, effective_scopes};
 use crate::models::{NewUser, ScopeRow, User};
 use crate::ports::dto::{
@@ -8,6 +10,7 @@ use crate::ports::dto::{
     UserWithScopes,
 };
 use crate::ports::postgres::register_user_with_event;
+use crate::ports::MfaRepository;
 use crate::ports::RefreshTokenRepository;
 use crate::ports::ScopeRepository;
 use crate::ports::UserRepository;
@@ -16,12 +19,19 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use http::StatusCode;
 use platform::auth::{require_scope, Authenticated, JwtVerifier, RevocationChecker};
+use platform::config::MfaPolicy;
 use platform::db::Db;
 use platform::events::EventPublisher;
 use platform::metrics::Metrics;
 use platform::observability::CorrelationId;
 use platform::server::AppError;
 use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct MfaConfig {
+    pub policy: MfaPolicy,
+    pub cipher: Option<Arc<MfaCipher>>,
+}
 
 #[derive(Clone)]
 pub struct AuthState {
@@ -35,6 +45,9 @@ pub struct AuthState {
     pub revocation: Arc<dyn RevocationChecker>,
     pub admin_emails: Arc<Vec<String>>,
     pub metrics: Metrics,
+    pub mfa: Arc<dyn MfaRepository>,
+    pub mfa_verifier: Arc<dyn FactorVerifier>,
+    pub mfa_config: MfaConfig,
 }
 
 impl FromRef<AuthState> for Arc<JwtVerifier> {

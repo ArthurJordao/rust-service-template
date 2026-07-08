@@ -54,6 +54,12 @@ async fn register_dispatch_then_get_my_account(pool: sqlx::PgPool) {
         revocation: revocation.clone(),
         admin_emails: Arc::new(vec![]),
         metrics: metrics.clone(),
+        mfa: user_repo.clone(),
+        mfa_verifier: Arc::new(domain_auth::auth::totp::TotpVerifier::new("test".into())),
+        mfa_config: domain_auth::ports::http::MfaConfig {
+            policy: platform::config::MfaPolicy::Off,
+            cipher: None,
+        },
     };
     let dlq = DlqState {
         pool: pool.clone(),
