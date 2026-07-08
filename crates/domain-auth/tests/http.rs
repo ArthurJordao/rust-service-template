@@ -86,7 +86,8 @@ async fn register_then_login(pool: sqlx::PgPool) {
     assert_eq!(login.status(), StatusCode::OK);
     let body = login.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(json["access_token"].as_str().unwrap().len() > 10);
+    assert_eq!(json["status"], "authenticated");
+    assert!(json["tokens"]["access_token"].as_str().unwrap().len() > 10);
 
     // Wrong password -> 401.
     let bad = app

@@ -20,6 +20,19 @@ pub struct AuthTokens {
     pub expires_in: i64,
 }
 
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum LoginResponse {
+    Authenticated {
+        tokens: AuthTokens,
+    },
+    MfaRequired {
+        purpose: String,
+        mfa_token: String,
+        factor_types: Vec<String>,
+    },
+}
+
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct RefreshRequest {
     pub refresh_token: String,

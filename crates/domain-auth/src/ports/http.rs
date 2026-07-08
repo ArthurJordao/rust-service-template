@@ -6,8 +6,8 @@ use crate::auth::totp::FactorVerifier;
 use crate::domain::{check_credentials, effective_scopes};
 use crate::models::{NewUser, ScopeRow, User};
 use crate::ports::dto::{
-    AuthTokens, LoginRequest, LogoutRequest, RefreshRequest, RegisterRequest, SetScopesRequest,
-    UserWithScopes,
+    AuthTokens, LoginRequest, LoginResponse, LogoutRequest, RefreshRequest, RegisterRequest,
+    SetScopesRequest, UserWithScopes,
 };
 use crate::ports::postgres::register_user_with_event;
 use crate::ports::MfaRepository;
@@ -146,11 +146,11 @@ pub(crate) async fn register(
 }
 
 #[utoipa::path(post, path = "/auth/login", request_body = LoginRequest,
-    responses((status = 200, body = AuthTokens), (status = 401)), tag = "auth")]
+    responses((status = 200, body = LoginResponse), (status = 401)), tag = "auth")]
 pub(crate) async fn login(
     State(state): State<AuthState>,
     Json(body): Json<LoginRequest>,
-) -> Result<Json<AuthTokens>, AppError> {
+) -> Result<Json<LoginResponse>, AppError> {
     let found = state
         .users
         .find_by_email(&body.email)
@@ -163,9 +163,45 @@ pub(crate) async fn login(
             return Err(e);
         }
     };
-    tracing::info!(email = %user.email, "login succeeded");
-    let tokens = issue_token_pair(&state, &user, vec!["pwd".into()]).await?;
-    Ok(Json(tokens))
+
+    let enabled = state
+        .mfa
+        .confirmed_factor(user.id)
+        .await
+        .map_err(AppError::Internal)?
+        .is_some();
+    let now = chrono::Utc::now();
+    use platform::config::MfaPolicy;
+    let response = match (state.mfa_config.policy, enabled) {
+        (MfaPolicy::Off, _) | (MfaPolicy::Optional, false) => {
+            let tokens = issue_token_pair(&state, &user, vec!["pwd".into()]).await?;
+            LoginResponse::Authenticated { tokens }
+        }
+        (_, true) => {
+            let mfa_token = state
+                .issuer
+                .issue_mfa_token(user.id, crate::auth::jwt::MfaPurpose::Pending, now)
+                .map_err(AppError::Internal)?;
+            LoginResponse::MfaRequired {
+                purpose: "verify".into(),
+                mfa_token,
+                factor_types: vec!["totp".into()],
+            }
+        }
+        (MfaPolicy::Required, false) => {
+            let mfa_token = state
+                .issuer
+                .issue_mfa_token(user.id, crate::auth::jwt::MfaPurpose::Enroll, now)
+                .map_err(AppError::Internal)?;
+            LoginResponse::MfaRequired {
+                purpose: "enroll".into(),
+                mfa_token,
+                factor_types: vec!["totp".into()],
+            }
+        }
+    };
+    tracing::info!(email = %user.email, "login processed");
+    Ok(Json(response))
 }
 
 #[utoipa::path(post, path = "/auth/refresh", request_body = RefreshRequest,

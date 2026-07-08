@@ -16,6 +16,7 @@ use utoipa::OpenApi;
         crate::ports::dto::RegisterRequest,
         crate::ports::dto::LoginRequest,
         crate::ports::dto::AuthTokens,
+        crate::ports::dto::LoginResponse,
         crate::ports::dto::RefreshRequest,
         crate::ports::dto::LogoutRequest,
         crate::ports::dto::UserWithScopes,
