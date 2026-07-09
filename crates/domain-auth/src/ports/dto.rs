@@ -56,3 +56,21 @@ pub struct UserWithScopes {
 pub struct SetScopesRequest {
     pub scopes: Vec<String>,
 }
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct MfaSetupResponse {
+    pub provisioning_uri: String,
+    pub secret: String,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct MfaConfirmRequest {
+    pub code: String,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct MfaConfirmResponse {
+    pub recovery_codes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<AuthTokens>,
+}

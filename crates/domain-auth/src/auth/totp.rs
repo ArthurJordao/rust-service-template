@@ -34,7 +34,8 @@ impl TotpVerifier {
         .map_err(|e| anyhow::anyhow!("totp init: {e}"))
     }
 
-    #[cfg(test)]
+    /// Compute the current TOTP code for a secret. Used by tests to drive enrollment
+    /// flows without a real authenticator app; harmless to expose in non-test builds.
     pub fn current_code(&self, secret_base32: &str, now: DateTime<Utc>) -> anyhow::Result<String> {
         let totp = self.totp(secret_base32, "test")?;
         Ok(totp.generate(now.timestamp() as u64))

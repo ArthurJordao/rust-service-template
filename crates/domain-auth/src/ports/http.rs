@@ -1,4 +1,5 @@
 use crate::auth::jwt::JwtIssuer;
+use crate::auth::jwt::MfaTokenClaims;
 use crate::auth::jwt::RefreshClaims;
 use crate::auth::mfa_crypto::MfaCipher;
 use crate::auth::password::hash_password;
@@ -6,8 +7,8 @@ use crate::auth::totp::FactorVerifier;
 use crate::domain::{check_credentials, effective_scopes};
 use crate::models::{NewUser, ScopeRow, User};
 use crate::ports::dto::{
-    AuthTokens, LoginRequest, LoginResponse, LogoutRequest, RefreshRequest, RegisterRequest,
-    SetScopesRequest, UserWithScopes,
+    AuthTokens, LoginRequest, LoginResponse, LogoutRequest, MfaConfirmRequest, MfaConfirmResponse,
+    MfaSetupResponse, RefreshRequest, RegisterRequest, SetScopesRequest, UserWithScopes,
 };
 use crate::ports::postgres::register_user_with_event;
 use crate::ports::MfaRepository;
@@ -68,6 +69,8 @@ pub fn router(state: AuthState) -> Router {
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh))
         .route("/auth/logout", post(logout))
+        .route("/auth/mfa/setup", post(mfa_setup))
+        .route("/auth/mfa/confirm", post(mfa_confirm))
         .route("/scopes", get(list_scopes))
         .route("/users", get(list_users))
         .route(
@@ -286,6 +289,142 @@ pub(crate) async fn logout(
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Resolve the acting user from either a normal access token or an mfa-token whose
+/// token_type is in `allowed` (e.g. ["mfa_enroll"]). Returns (user_id, from_mfa_token).
+fn mfa_user_id(
+    state: &AuthState,
+    headers: &http::HeaderMap,
+    allowed: &[&str],
+) -> Result<(i64, bool), AppError> {
+    let token = headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or_else(|| AppError::Unauthorized("missing Bearer token".into()))?;
+    // Try an access token first.
+    if let Ok(claims) = state.verifier.verify(token) {
+        if claims.token_type == "user" {
+            let id = claims
+                .sub
+                .strip_prefix("user-")
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| AppError::Unauthorized("bad sub".into()))?;
+            return Ok((id, false));
+        }
+    }
+    // Else an mfa-token of an allowed type.
+    let claims: MfaTokenClaims = state.verifier.decode(token)?;
+    if !allowed.contains(&claims.token_type.as_str()) {
+        return Err(AppError::Unauthorized("wrong token for this step".into()));
+    }
+    let id = claims
+        .sub
+        .strip_prefix("user-")
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| AppError::Unauthorized("bad sub".into()))?;
+    Ok((id, true))
+}
+
+fn cipher(state: &AuthState) -> Result<&MfaCipher, AppError> {
+    state
+        .mfa_config
+        .cipher
+        .as_deref()
+        .ok_or_else(|| AppError::Conflict("MFA is disabled".into()))
+}
+
+#[utoipa::path(post, path = "/auth/mfa/setup", responses((status = 200, body = MfaSetupResponse)), tag = "auth")]
+pub(crate) async fn mfa_setup(
+    State(state): State<AuthState>,
+    headers: http::HeaderMap,
+) -> Result<Json<MfaSetupResponse>, AppError> {
+    let (user_id, _) = mfa_user_id(&state, &headers, &["mfa_enroll"])?;
+    let user = state
+        .users
+        .find_by_id(user_id)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::Unauthorized("user not found".into()))?;
+    let secret = state.mfa_verifier.generate_secret();
+    let uri = state
+        .mfa_verifier
+        .provisioning_uri(&secret, &user.email)
+        .map_err(AppError::Internal)?;
+    let enc = cipher(&state)?
+        .encrypt(&secret)
+        .map_err(AppError::Internal)?;
+    state
+        .mfa
+        .upsert_unconfirmed_factor(user_id, "totp", &enc)
+        .await
+        .map_err(AppError::Internal)?;
+    tracing::info!(user_id, "mfa setup initiated");
+    Ok(Json(MfaSetupResponse {
+        provisioning_uri: uri,
+        secret,
+    }))
+}
+
+#[utoipa::path(post, path = "/auth/mfa/confirm", request_body = MfaConfirmRequest,
+    responses((status = 200, body = MfaConfirmResponse)), tag = "auth")]
+pub(crate) async fn mfa_confirm(
+    State(state): State<AuthState>,
+    headers: http::HeaderMap,
+    Json(body): Json<MfaConfirmRequest>,
+) -> Result<Json<MfaConfirmResponse>, AppError> {
+    let (user_id, from_mfa_token) = mfa_user_id(&state, &headers, &["mfa_enroll"])?;
+    let factor = state
+        .mfa
+        .get_factor(user_id, "totp")
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::BadRequest("no pending factor; call setup first".into()))?;
+    let secret = cipher(&state)?
+        .decrypt(&factor.secret_encrypted)
+        .map_err(AppError::Internal)?;
+    if !state
+        .mfa_verifier
+        .verify(&secret, &body.code, chrono::Utc::now())
+    {
+        return Err(AppError::Unauthorized("invalid code".into()));
+    }
+    state
+        .mfa
+        .confirm_factor(user_id, "totp")
+        .await
+        .map_err(AppError::Internal)?;
+
+    // fresh recovery codes (shown once)
+    let codes = crate::auth::recovery::generate_recovery_codes();
+    let hashes: Vec<String> = codes
+        .iter()
+        .map(|c| crate::auth::recovery::hash_recovery_code(c))
+        .collect::<anyhow::Result<_>>()
+        .map_err(AppError::Internal)?;
+    state
+        .mfa
+        .store_recovery_codes(user_id, &hashes)
+        .await
+        .map_err(AppError::Internal)?;
+
+    let tokens = if from_mfa_token {
+        let user = state
+            .users
+            .find_by_id(user_id)
+            .await
+            .map_err(AppError::Internal)?
+            .ok_or_else(|| AppError::Unauthorized("user not found".into()))?;
+        Some(issue_token_pair(&state, &user, vec!["pwd".into(), "totp".into()]).await?)
+    } else {
+        None // self-enroll: caller already holds a valid access token
+    };
+    tracing::info!(user_id, "mfa confirmed");
+    Ok(Json(MfaConfirmResponse {
+        recovery_codes: codes,
+        tokens,
+    }))
 }
 
 #[utoipa::path(get, path = "/scopes",
