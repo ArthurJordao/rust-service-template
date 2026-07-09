@@ -8,7 +8,8 @@ use crate::domain::{check_credentials, effective_scopes};
 use crate::models::{NewUser, ScopeRow, User};
 use crate::ports::dto::{
     AuthTokens, LoginRequest, LoginResponse, LogoutRequest, MfaConfirmRequest, MfaConfirmResponse,
-    MfaSetupResponse, RefreshRequest, RegisterRequest, SetScopesRequest, UserWithScopes,
+    MfaSetupResponse, MfaVerifyRequest, RefreshRequest, RegisterRequest, SetScopesRequest,
+    UserWithScopes,
 };
 use crate::ports::postgres::register_user_with_event;
 use crate::ports::MfaRepository;
@@ -71,6 +72,7 @@ pub fn router(state: AuthState) -> Router {
         .route("/auth/logout", post(logout))
         .route("/auth/mfa/setup", post(mfa_setup))
         .route("/auth/mfa/confirm", post(mfa_confirm))
+        .route("/auth/mfa/verify", post(mfa_verify))
         .route("/scopes", get(list_scopes))
         .route("/users", get(list_users))
         .route(
@@ -433,6 +435,75 @@ pub(crate) async fn mfa_confirm(
         recovery_codes: codes,
         tokens,
     }))
+}
+
+const MFA_MAX_ATTEMPTS: i32 = 5;
+const MFA_LOCK_MINUTES: i64 = 15;
+
+#[utoipa::path(post, path = "/auth/mfa/verify", request_body = MfaVerifyRequest,
+    responses((status = 200, body = AuthTokens), (status = 401)), tag = "auth")]
+pub(crate) async fn mfa_verify(
+    State(state): State<AuthState>,
+    headers: http::HeaderMap,
+    Json(body): Json<MfaVerifyRequest>,
+) -> Result<Json<AuthTokens>, AppError> {
+    let (user_id, _) = mfa_user_id(&state, &headers, &["mfa_pending"]).await?;
+    let factor = state
+        .mfa
+        .confirmed_factor(user_id)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::BadRequest("no confirmed factor".into()))?;
+    let now = chrono::Utc::now();
+    if factor.locked_until.map(|t| t > now).unwrap_or(false) {
+        return Err(AppError::Unauthorized(
+            "too many attempts; try later".into(),
+        ));
+    }
+    let secret = cipher(&state)?
+        .decrypt(&factor.secret_encrypted)
+        .map_err(AppError::Internal)?;
+
+    let (ok, amr_factor) = if state.mfa_verifier.verify(&secret, &body.code, now) {
+        (true, "totp")
+    } else if state
+        .mfa
+        .consume_recovery_code(user_id, &body.code)
+        .await
+        .map_err(AppError::Internal)?
+    {
+        (true, "recovery")
+    } else {
+        (false, "")
+    };
+
+    if !ok {
+        let next = factor.failed_attempts + 1;
+        let lock =
+            (next >= MFA_MAX_ATTEMPTS).then(|| now + chrono::Duration::minutes(MFA_LOCK_MINUTES));
+        state
+            .mfa
+            .record_failed_attempt(factor.id, lock)
+            .await
+            .map_err(AppError::Internal)?;
+        tracing::warn!(user_id, "mfa verify failed");
+        return Err(AppError::Unauthorized("invalid code".into()));
+    }
+
+    state
+        .mfa
+        .reset_attempts(factor.id)
+        .await
+        .map_err(AppError::Internal)?;
+    let user = state
+        .users
+        .find_by_id(user_id)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::Unauthorized("user not found".into()))?;
+    tracing::info!(user_id, amr = amr_factor, "mfa verified");
+    let tokens = issue_token_pair(&state, &user, vec!["pwd".into(), amr_factor.into()]).await?;
+    Ok(Json(tokens))
 }
 
 #[utoipa::path(get, path = "/scopes",

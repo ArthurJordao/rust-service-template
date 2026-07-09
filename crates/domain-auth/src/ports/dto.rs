@@ -74,3 +74,8 @@ pub struct MfaConfirmResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tokens: Option<AuthTokens>,
 }
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct MfaVerifyRequest {
+    pub code: String,
+}

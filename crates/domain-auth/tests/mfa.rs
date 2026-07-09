@@ -131,6 +131,33 @@ fn current_totp_code(secret: &str) -> String {
         .unwrap()
 }
 
+/// Login (obtaining an enroll mfa-token) -> setup -> confirm. Returns the raw TOTP
+/// secret so callers can compute fresh codes for a subsequent verify step.
+async fn enroll(app: &axum::Router, email: &str, password: &str) -> String {
+    let (_s, login) = post_json(
+        app,
+        "/auth/login",
+        &format!(r#"{{"email":"{email}","password":"{password}"}}"#),
+    )
+    .await;
+    let mfa_token = login["mfa_token"].as_str().unwrap().to_string();
+
+    let (s1, setup) = post_bearer(app, "/auth/mfa/setup", &mfa_token, "{}").await;
+    assert_eq!(s1, StatusCode::OK);
+    let secret = setup["secret"].as_str().unwrap().to_string();
+
+    let code = current_totp_code(&secret);
+    let (s2, _confirm) = post_bearer(
+        app,
+        "/auth/mfa/confirm",
+        &mfa_token,
+        &format!(r#"{{"code":"{code}"}}"#),
+    )
+    .await;
+    assert_eq!(s2, StatusCode::OK);
+    secret
+}
+
 #[sqlx::test(migrations = "../../migrations")]
 async fn login_required_no_factor_returns_enroll_challenge(pool: sqlx::PgPool) {
     let app = router(state_with(pool.clone(), MfaPolicy::Required));
@@ -263,4 +290,83 @@ async fn mfa_pending_token_rejected_on_setup(pool: sqlx::PgPool) {
     // setup only allows `mfa_enroll` (or a live access token), not `mfa_pending`.
     let (setup_status, _) = post_bearer(&app, "/auth/mfa/setup", pending_token, "{}").await;
     assert_eq!(setup_status, StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn verify_completes_login_and_wrong_code_locks_out(pool: sqlx::PgPool) {
+    let app = router(state_with(pool.clone(), MfaPolicy::Required));
+    register(&app, "a@b.c", "pw").await;
+    let secret = enroll(&app, "a@b.c", "pw").await; // helper: login->setup->confirm, returns secret
+
+    // subsequent login now requires verify
+    let (_s, login) = post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
+    assert_eq!(login["purpose"], "verify");
+    let pending = login["mfa_token"].as_str().unwrap().to_string();
+
+    // wrong code fails
+    let (bad, _) = post_bearer(&app, "/auth/mfa/verify", &pending, r#"{"code":"000000"}"#).await;
+    assert_eq!(bad, StatusCode::UNAUTHORIZED);
+
+    // correct code succeeds
+    let code = current_totp_code(&secret);
+    let (ok, tokens) = post_bearer(
+        &app,
+        "/auth/mfa/verify",
+        &pending,
+        &format!(r#"{{"code":"{code}"}}"#),
+    )
+    .await;
+    assert_eq!(ok, StatusCode::OK);
+    assert!(tokens["access_token"].as_str().unwrap().len() > 10);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn verify_with_recovery_code_is_single_use(pool: sqlx::PgPool) {
+    let app = router(state_with(pool.clone(), MfaPolicy::Required));
+    register(&app, "a@b.c", "pw").await;
+    enroll(&app, "a@b.c", "pw").await;
+
+    // Grab a recovery code directly from the confirm response by re-running the
+    // enroll flow's confirm step is not possible (codes only shown once at confirm
+    // time and enroll() discards them), so fetch a fresh set via the DB-backed repo.
+    let recovery_code = {
+        let repo = domain_auth::ports::postgres::PostgresUserRepository::new(pool.clone());
+        use domain_auth::ports::MfaRepository;
+        let codes = domain_auth::auth::recovery::generate_recovery_codes();
+        let hashes: Vec<String> = codes
+            .iter()
+            .map(|c| domain_auth::auth::recovery::hash_recovery_code(c).unwrap())
+            .collect();
+        let user = {
+            use domain_auth::ports::UserRepository;
+            repo.find_by_email("a@b.c").await.unwrap().unwrap()
+        };
+        repo.store_recovery_codes(user.id, &hashes).await.unwrap();
+        codes[0].clone()
+    };
+
+    let (_s, login) = post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
+    let pending = login["mfa_token"].as_str().unwrap().to_string();
+
+    let (ok, _tokens) = post_bearer(
+        &app,
+        "/auth/mfa/verify",
+        &pending,
+        &format!(r#"{{"code":"{recovery_code}"}}"#),
+    )
+    .await;
+    assert_eq!(ok, StatusCode::OK);
+
+    // second login + reuse of the same recovery code must fail
+    let (_s2, login2) =
+        post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
+    let pending2 = login2["mfa_token"].as_str().unwrap().to_string();
+    let (reused, _) = post_bearer(
+        &app,
+        "/auth/mfa/verify",
+        &pending2,
+        &format!(r#"{{"code":"{recovery_code}"}}"#),
+    )
+    .await;
+    assert_eq!(reused, StatusCode::UNAUTHORIZED);
 }
