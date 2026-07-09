@@ -35,6 +35,12 @@ impl platform::auth::RevocationChecker for AlwaysRevoked {
     }
 }
 
+fn state_with_admin(pool: sqlx::PgPool, policy: MfaPolicy, admin_email: &str) -> AuthState {
+    let mut state = state_with(pool, policy);
+    state.admin_emails = Arc::new(vec![admin_email.to_string()]);
+    state
+}
+
 fn state_with_revocation(
     pool: sqlx::PgPool,
     policy: MfaPolicy,
@@ -96,7 +102,7 @@ async fn post_json(app: &axum::Router, uri: &str, body: &str) -> (StatusCode, se
         .unwrap();
     let status = res.status();
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
     (status, json)
 }
 
@@ -121,7 +127,30 @@ async fn post_bearer(
         .unwrap();
     let status = res.status();
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+async fn delete_bearer(
+    app: &axum::Router,
+    uri: &str,
+    token: &str,
+) -> (StatusCode, serde_json::Value) {
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
     (status, json)
 }
 
@@ -156,6 +185,36 @@ async fn enroll(app: &axum::Router, email: &str, password: &str) -> String {
     .await;
     assert_eq!(s2, StatusCode::OK);
     secret
+}
+
+/// Login (obtaining an enroll mfa-token) -> setup -> confirm, returning the live
+/// access token issued directly by `confirm` for a first-time enrollment.
+async fn access_token_via_enroll(app: &axum::Router, email: &str, password: &str) -> String {
+    let (_s, login) = post_json(
+        app,
+        "/auth/login",
+        &format!(r#"{{"email":"{email}","password":"{password}"}}"#),
+    )
+    .await;
+    let mfa_token = login["mfa_token"].as_str().unwrap().to_string();
+
+    let (s1, setup) = post_bearer(app, "/auth/mfa/setup", &mfa_token, "{}").await;
+    assert_eq!(s1, StatusCode::OK);
+    let secret = setup["secret"].as_str().unwrap().to_string();
+
+    let code = current_totp_code(&secret);
+    let (s2, confirm) = post_bearer(
+        app,
+        "/auth/mfa/confirm",
+        &mfa_token,
+        &format!(r#"{{"code":"{code}"}}"#),
+    )
+    .await;
+    assert_eq!(s2, StatusCode::OK);
+    confirm["tokens"]["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 #[sqlx::test(migrations = "../../migrations")]
@@ -401,4 +460,52 @@ async fn access_token_rejected_on_verify(pool: sqlx::PgPool) {
     )
     .await;
     assert_eq!(verify_status, StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn admin_reset_clears_factor_and_emits_event(pool: sqlx::PgPool) {
+    let app = router(state_with_admin(
+        pool.clone(),
+        MfaPolicy::Required,
+        "admin@x.y",
+    ));
+    register(&app, "admin@x.y", "pw").await;
+    // enroll->confirm gives the admin both a confirmed factor and a live (admin-scoped)
+    // access token in one shot, since confirm issues tokens for a first-time enrollment.
+    let admin_token = access_token_via_enroll(&app, "admin@x.y", "pw").await;
+    let uid: i64 = sqlx::query_scalar("select id from auth_user where email='admin@x.y'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let (s, _) = post_bearer(
+        &app,
+        &format!("/admin/users/{uid}/mfa/reset"),
+        &admin_token,
+        "{}",
+    )
+    .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+
+    let cnt: i64 = sqlx::query_scalar("select count(*) from auth_mfa_factor where user_id=$1")
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(cnt, 0);
+    let ev: i64 =
+        sqlx::query_scalar("select count(*) from outbox_event where event_type='user.mfa_reset'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(ev, 1);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn self_disable_rejected_when_required(pool: sqlx::PgPool) {
+    let app = router(state_with(pool.clone(), MfaPolicy::Required));
+    register(&app, "a@b.c", "pw").await;
+    let token = access_token_via_enroll(&app, "a@b.c", "pw").await;
+    let (s, _) = delete_bearer(&app, "/auth/mfa", &token).await;
+    assert_eq!(s, StatusCode::CONFLICT);
 }

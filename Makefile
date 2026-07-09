@@ -45,7 +45,8 @@ gen-keys:
 	mkdir -p secrets
 	openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out secrets/jwt_private.pem
 	openssl rsa -pubout -in secrets/jwt_private.pem -out secrets/jwt_public.pem
-	@echo "Wrote secrets/jwt_private.pem and secrets/jwt_public.pem (gitignored)."
+	head -c 32 /dev/urandom | base32 | tr -d '=' > secrets/mfa_key.b32
+	@echo "Wrote secrets/jwt_private.pem, secrets/jwt_public.pem, and secrets/mfa_key.b32 (gitignored)."
 
 .PHONY: gen-api
 gen-api:

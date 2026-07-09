@@ -73,6 +73,9 @@ pub fn router(state: AuthState) -> Router {
         .route("/auth/mfa/setup", post(mfa_setup))
         .route("/auth/mfa/confirm", post(mfa_confirm))
         .route("/auth/mfa/verify", post(mfa_verify))
+        .route("/auth/mfa/recovery-codes", post(mfa_regen_recovery))
+        .route("/auth/mfa", axum::routing::delete(mfa_self_disable))
+        .route("/admin/users/:id/mfa/reset", post(admin_mfa_reset))
         .route("/scopes", get(list_scopes))
         .route("/users", get(list_users))
         .route(
@@ -509,6 +512,113 @@ pub(crate) async fn mfa_verify(
     tracing::info!(user_id, amr = amr_factor, "mfa verified");
     let tokens = issue_token_pair(&state, &user, vec!["pwd".into(), amr_factor.into()]).await?;
     Ok(Json(tokens))
+}
+
+#[utoipa::path(post, path = "/auth/mfa/recovery-codes",
+    responses((status = 200, body = [String]), (status = 401)),
+    security(("bearer_auth" = [])), tag = "auth")]
+pub(crate) async fn mfa_regen_recovery(
+    State(state): State<AuthState>,
+    Authenticated(claims): Authenticated,
+) -> Result<Json<Vec<String>>, AppError> {
+    let uid = user_id_from_sub(&claims.sub)?;
+    let codes = crate::auth::recovery::generate_recovery_codes();
+    let hashes: Vec<String> = codes
+        .iter()
+        .map(|c| crate::auth::recovery::hash_recovery_code(c))
+        .collect::<anyhow::Result<_>>()
+        .map_err(AppError::Internal)?;
+    state
+        .mfa
+        .store_recovery_codes(uid, &hashes)
+        .await
+        .map_err(AppError::Internal)?;
+    tracing::info!(user_id = uid, "mfa recovery codes regenerated");
+    Ok(Json(codes))
+}
+
+#[utoipa::path(delete, path = "/auth/mfa",
+    responses((status = 204), (status = 401), (status = 409)),
+    security(("bearer_auth" = [])), tag = "auth")]
+pub(crate) async fn mfa_self_disable(
+    State(state): State<AuthState>,
+    Authenticated(claims): Authenticated,
+) -> Result<StatusCode, AppError> {
+    if state.mfa_config.policy == platform::config::MfaPolicy::Required {
+        return Err(AppError::Conflict(
+            "cannot disable MFA under required policy".into(),
+        ));
+    }
+    let uid = user_id_from_sub(&claims.sub)?;
+    state
+        .mfa
+        .delete_factors(uid)
+        .await
+        .map_err(AppError::Internal)?;
+    state
+        .mfa
+        .delete_recovery_codes(uid)
+        .await
+        .map_err(AppError::Internal)?;
+    tracing::info!(user_id = uid, "mfa self-disabled");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(post, path = "/admin/users/{id}/mfa/reset",
+    params(("id" = i64, Path,)),
+    responses((status = 204), (status = 401), (status = 403)),
+    security(("bearer_auth" = [])), tag = "admin")]
+pub(crate) async fn admin_mfa_reset(
+    State(state): State<AuthState>,
+    Authenticated(claims): Authenticated,
+    CorrelationId(cid): CorrelationId,
+    Path(target): Path<i64>,
+) -> Result<StatusCode, AppError> {
+    require_scope(&claims, "admin")?;
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    sqlx::query("delete from auth_mfa_factor where user_id = $1")
+        .bind(target)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    sqlx::query("delete from auth_mfa_recovery_code where user_id = $1")
+        .bind(target)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    let admin_id = user_id_from_sub(&claims.sub)?;
+    state
+        .publisher
+        .publish(
+            &mut tx,
+            platform::events::NewEvent {
+                event_type: "user.mfa_reset".into(),
+                aggregate_id: target.to_string(),
+                payload: serde_json::json!({ "admin_user_id": admin_id, "target_user_id": target }),
+                correlation_id: cid.clone(),
+            },
+        )
+        .await
+        .map_err(AppError::Internal)?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    tracing::warn!(
+        admin_user_id = admin_id,
+        target_user_id = target,
+        "mfa reset by admin"
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn user_id_from_sub(sub: &str) -> Result<i64, AppError> {
+    sub.strip_prefix("user-")
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| AppError::Unauthorized("bad sub".into()))
 }
 
 #[utoipa::path(get, path = "/scopes",
