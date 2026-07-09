@@ -293,7 +293,7 @@ pub(crate) async fn logout(
 
 /// Resolve the acting user from either a normal access token or an mfa-token whose
 /// token_type is in `allowed` (e.g. ["mfa_enroll"]). Returns (user_id, from_mfa_token).
-fn mfa_user_id(
+async fn mfa_user_id(
     state: &AuthState,
     headers: &http::HeaderMap,
     allowed: &[&str],
@@ -306,6 +306,14 @@ fn mfa_user_id(
     // Try an access token first.
     if let Ok(claims) = state.verifier.verify(token) {
         if claims.token_type == "user" {
+            if state
+                .revocation
+                .is_revoked(&claims)
+                .await
+                .map_err(AppError::Internal)?
+            {
+                return Err(AppError::Unauthorized("token revoked".into()));
+            }
             let id = claims
                 .sub
                 .strip_prefix("user-")
@@ -340,7 +348,7 @@ pub(crate) async fn mfa_setup(
     State(state): State<AuthState>,
     headers: http::HeaderMap,
 ) -> Result<Json<MfaSetupResponse>, AppError> {
-    let (user_id, _) = mfa_user_id(&state, &headers, &["mfa_enroll"])?;
+    let (user_id, _) = mfa_user_id(&state, &headers, &["mfa_enroll"]).await?;
     let user = state
         .users
         .find_by_id(user_id)
@@ -374,7 +382,7 @@ pub(crate) async fn mfa_confirm(
     headers: http::HeaderMap,
     Json(body): Json<MfaConfirmRequest>,
 ) -> Result<Json<MfaConfirmResponse>, AppError> {
-    let (user_id, from_mfa_token) = mfa_user_id(&state, &headers, &["mfa_enroll"])?;
+    let (user_id, from_mfa_token) = mfa_user_id(&state, &headers, &["mfa_enroll"]).await?;
     let factor = state
         .mfa
         .get_factor(user_id, "totp")

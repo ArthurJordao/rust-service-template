@@ -16,6 +16,30 @@ const TEST_PRIV_PEM: &str = include_str!("fixtures/test_priv.pem");
 const TEST_PUB_PEM: &str = include_str!("fixtures/test_pub.pem");
 
 fn state_with(pool: sqlx::PgPool, policy: MfaPolicy) -> AuthState {
+    state_with_revocation(
+        pool,
+        policy,
+        Arc::new(platform::auth::NoopRevocationChecker),
+    )
+}
+
+/// Test-only revocation checker that always reports the token as revoked, used to
+/// prove that the MFA-enrollment auth guard consults `RevocationChecker` on the
+/// normal-access-token branch.
+struct AlwaysRevoked;
+
+#[async_trait::async_trait]
+impl platform::auth::RevocationChecker for AlwaysRevoked {
+    async fn is_revoked(&self, _claims: &platform::auth::AccessClaims) -> anyhow::Result<bool> {
+        Ok(true)
+    }
+}
+
+fn state_with_revocation(
+    pool: sqlx::PgPool,
+    policy: MfaPolicy,
+    revocation: Arc<dyn platform::auth::RevocationChecker>,
+) -> AuthState {
     let repo = Arc::new(PostgresUserRepository::new(pool.clone()));
     AuthState {
         pool: pool.clone(),
@@ -27,7 +51,7 @@ fn state_with(pool: sqlx::PgPool, policy: MfaPolicy) -> AuthState {
         )),
         issuer: Arc::new(JwtIssuer::from_rsa_pem(TEST_PRIV_PEM, 900, 7).unwrap()),
         verifier: Arc::new(platform::auth::JwtVerifier::from_rsa_pem(TEST_PUB_PEM).unwrap()),
-        revocation: Arc::new(platform::auth::NoopRevocationChecker),
+        revocation,
         admin_emails: Arc::new(vec![]),
         metrics: Metrics::new().unwrap(),
         mfa: repo.clone(),
@@ -171,4 +195,72 @@ async fn forced_enroll_flow_issues_tokens_with_amr(pool: sqlx::PgPool) {
     let claims = verifier.verify(access_token).unwrap();
     assert!(claims.amr.contains(&"totp".to_string()));
     assert!(claims.amr.contains(&"pwd".to_string()));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn revoked_access_token_rejected_on_setup(pool: sqlx::PgPool) {
+    let app = router(state_with_revocation(
+        pool.clone(),
+        MfaPolicy::Optional,
+        Arc::new(AlwaysRevoked),
+    ));
+    register(&app, "a@b.c", "pw").await;
+    let (status, login) =
+        post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
+    assert_eq!(status, 200);
+    assert_eq!(login["status"], "authenticated");
+    let access_token = login["tokens"]["access_token"].as_str().unwrap();
+
+    // A structurally valid, unexpired access token whose jti/user the RevocationChecker
+    // reports as revoked must still be rejected — mirroring the `Authenticated` extractor.
+    let (setup_status, _) = post_bearer(&app, "/auth/mfa/setup", access_token, "{}").await;
+    assert_eq!(setup_status, StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn refresh_token_rejected_on_setup(pool: sqlx::PgPool) {
+    let app = router(state_with(pool.clone(), MfaPolicy::Optional));
+    register(&app, "a@b.c", "pw").await;
+    let (status, login) =
+        post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
+    assert_eq!(status, 200);
+    let refresh_token = login["tokens"]["refresh_token"].as_str().unwrap();
+
+    // A refresh token is the wrong purpose for MFA setup: it isn't a live access
+    // token and its `token_type` isn't in the enroll-token allow-list.
+    let (setup_status, _) = post_bearer(&app, "/auth/mfa/setup", refresh_token, "{}").await;
+    assert_eq!(setup_status, StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn mfa_pending_token_rejected_on_setup(pool: sqlx::PgPool) {
+    let app = router(state_with(pool.clone(), MfaPolicy::Required));
+    register(&app, "a@b.c", "pw").await;
+    // First login enrolls (policy=Required, no factor yet) — set up + confirm a factor
+    // so the *second* login issues an `mfa_pending` (verify) challenge token instead.
+    let (_s, first_login) =
+        post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
+    let enroll_token = first_login["mfa_token"].as_str().unwrap().to_string();
+    let (s1, setup) = post_bearer(&app, "/auth/mfa/setup", &enroll_token, "{}").await;
+    assert_eq!(s1, 200);
+    let secret = setup["secret"].as_str().unwrap().to_string();
+    let code = current_totp_code(&secret);
+    let (s2, _confirm) = post_bearer(
+        &app,
+        "/auth/mfa/confirm",
+        &enroll_token,
+        &format!(r#"{{"code":"{code}"}}"#),
+    )
+    .await;
+    assert_eq!(s2, 200);
+
+    let (_s3, second_login) =
+        post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
+    assert_eq!(second_login["status"], "mfa_required");
+    assert_eq!(second_login["purpose"], "verify");
+    let pending_token = second_login["mfa_token"].as_str().unwrap();
+
+    // setup only allows `mfa_enroll` (or a live access token), not `mfa_pending`.
+    let (setup_status, _) = post_bearer(&app, "/auth/mfa/setup", pending_token, "{}").await;
+    assert_eq!(setup_status, StatusCode::UNAUTHORIZED);
 }
