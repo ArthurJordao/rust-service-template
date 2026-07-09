@@ -370,3 +370,35 @@ async fn verify_with_recovery_code_is_single_use(pool: sqlx::PgPool) {
     .await;
     assert_eq!(reused, StatusCode::UNAUTHORIZED);
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn access_token_rejected_on_verify(pool: sqlx::PgPool) {
+    let app = router(state_with(pool.clone(), MfaPolicy::Required));
+    register(&app, "a@b.c", "pw").await;
+    let secret = enroll(&app, "a@b.c", "pw").await; // helper: login->setup->confirm, returns secret
+
+    // Complete a full verify to obtain a live access token.
+    let (_s, login) = post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
+    let pending = login["mfa_token"].as_str().unwrap().to_string();
+    let code = current_totp_code(&secret);
+    let (ok, tokens) = post_bearer(
+        &app,
+        "/auth/mfa/verify",
+        &pending,
+        &format!(r#"{{"code":"{code}"}}"#),
+    )
+    .await;
+    assert_eq!(ok, StatusCode::OK);
+    let access_token = tokens["access_token"].as_str().unwrap();
+
+    // A live access token is not an `mfa_pending` token: verify must reject it even
+    // though `mfa_user_id`'s access-token branch would otherwise accept it.
+    let (verify_status, _) = post_bearer(
+        &app,
+        "/auth/mfa/verify",
+        access_token,
+        &format!(r#"{{"code":"{code}"}}"#),
+    )
+    .await;
+    assert_eq!(verify_status, StatusCode::UNAUTHORIZED);
+}

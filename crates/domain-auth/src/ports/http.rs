@@ -447,7 +447,12 @@ pub(crate) async fn mfa_verify(
     headers: http::HeaderMap,
     Json(body): Json<MfaVerifyRequest>,
 ) -> Result<Json<AuthTokens>, AppError> {
-    let (user_id, _) = mfa_user_id(&state, &headers, &["mfa_pending"]).await?;
+    let (user_id, from_mfa_token) = mfa_user_id(&state, &headers, &["mfa_pending"]).await?;
+    if !from_mfa_token {
+        return Err(AppError::Unauthorized(
+            "an mfa_pending token is required".into(),
+        ));
+    }
     let factor = state
         .mfa
         .confirmed_factor(user_id)
