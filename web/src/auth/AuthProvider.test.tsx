@@ -28,8 +28,11 @@ describe("AuthProvider", () => {
   });
 
   it("login stores tokens and exposes the user", async () => {
-    server.use(http.post("/api/auth/login", () =>
-      HttpResponse.json({ access_token: TOKEN, refresh_token: "rt", token_type: "Bearer", expires_in: 900 })));
+    server.use(
+      http.post("/api/auth/login", () =>
+        HttpResponse.json({ status: "authenticated", tokens: { access_token: TOKEN, refresh_token: "rt", token_type: "Bearer", expires_in: 900 } }),
+      ),
+    );
     render(<AuthProvider><Probe /></AuthProvider>);
     await waitFor(() => screen.getByText("user:none"));
     await userEvent.click(screen.getByText("login"));

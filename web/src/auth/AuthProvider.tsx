@@ -1,15 +1,20 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import type { components } from "@/api/schema";
 import { tokenStore } from "@/auth/tokenStore";
 import { setOnAuthFailure } from "@/lib/fetchClient";
 import { decodeAccessToken } from "@/lib/jwt";
 import * as authApi from "@/api/auth";
+
+type AuthTokens = components["schemas"]["AuthTokens"];
+export interface MfaChallenge { mfa_token: string; purpose: string; factor_types: string[]; }
 
 interface User { email?: string; scopes: string[]; }
 interface AuthCtx {
   user: User | null;
   isAdmin: boolean;
   status: "loading" | "ready";
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<MfaChallenge | null>;
+  applySession: (tokens: AuthTokens) => void;
   register: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -53,9 +58,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAdmin: !!user?.scopes.includes("admin"),
     status,
     login: async (email, password) => {
-      const t = await authApi.login(email, password);
-      applyTokens(t.access_token, t.refresh_token);
+      const res = await authApi.login(email, password);
+      if (res.status === "authenticated") {
+        applyTokens(res.tokens.access_token, res.tokens.refresh_token);
+        return null;
+      }
+      return { mfa_token: res.mfa_token, purpose: res.purpose, factor_types: res.factor_types };
     },
+    applySession: (tokens) => applyTokens(tokens.access_token, tokens.refresh_token),
     register: async (email, password) => {
       const t = await authApi.register(email, password);
       applyTokens(t.access_token, t.refresh_token);
