@@ -79,3 +79,9 @@ pub struct MfaConfirmResponse {
 pub struct MfaVerifyRequest {
     pub code: String,
 }
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct MfaStatusResponse {
+    pub enabled: bool,
+    pub policy: String,
+}

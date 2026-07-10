@@ -139,7 +139,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["mfa_status"];
         put?: never;
         post?: never;
         delete: operations["mfa_self_disable"];
@@ -370,6 +370,10 @@ export interface components {
         MfaSetupResponse: {
             provisioning_uri: string;
             secret: string;
+        };
+        MfaStatusResponse: {
+            enabled: boolean;
+            policy: string;
         };
         MfaVerifyRequest: {
             code: string;
@@ -660,6 +664,31 @@ export interface operations {
         };
         responses: {
             204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    mfa_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaStatusResponse"];
+                };
+            };
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

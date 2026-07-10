@@ -9,6 +9,16 @@ pub enum MfaPolicy {
     Required,
 }
 
+impl MfaPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MfaPolicy::Off => "off",
+            MfaPolicy::Optional => "optional",
+            MfaPolicy::Required => "required",
+        }
+    }
+}
+
 impl std::str::FromStr for MfaPolicy {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> anyhow::Result<MfaPolicy> {

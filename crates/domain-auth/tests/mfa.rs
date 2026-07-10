@@ -154,6 +154,25 @@ async fn delete_bearer(
     (status, json)
 }
 
+async fn get_bearer(app: &axum::Router, uri: &str, token: &str) -> (StatusCode, serde_json::Value) {
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
 fn current_totp_code(secret: &str) -> String {
     TotpVerifier::new("test".into())
         .current_code(secret, chrono::Utc::now())
@@ -215,6 +234,25 @@ async fn access_token_via_enroll(app: &axum::Router, email: &str, password: &str
         .as_str()
         .unwrap()
         .to_string()
+}
+
+/// Self-enroll via setup + confirm with an access token (not an mfa_token).
+/// Returns the raw TOTP secret.
+async fn self_enroll(app: &axum::Router, access: &str) -> String {
+    let (s1, setup) = post_bearer(app, "/auth/mfa/setup", access, "{}").await;
+    assert_eq!(s1, StatusCode::OK);
+    let secret = setup["secret"].as_str().unwrap().to_string();
+
+    let code = current_totp_code(&secret);
+    let (s2, _confirm) = post_bearer(
+        app,
+        "/auth/mfa/confirm",
+        access,
+        &format!(r#"{{"code":"{code}"}}"#),
+    )
+    .await;
+    assert_eq!(s2, StatusCode::OK);
+    secret
 }
 
 #[sqlx::test(migrations = "../../migrations")]
@@ -508,4 +546,27 @@ async fn self_disable_rejected_when_required(pool: sqlx::PgPool) {
     let token = access_token_via_enroll(&app, "a@b.c", "pw").await;
     let (s, _) = delete_bearer(&app, "/auth/mfa", &token).await;
     assert_eq!(s, StatusCode::CONFLICT);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn mfa_status_reports_enabled_after_enroll(pool: sqlx::PgPool) {
+    let app = router(state_with(pool.clone(), MfaPolicy::Optional));
+    register(&app, "a@b.c", "pw").await;
+    // before enrolling: authenticated login returns a session token
+    let (_s, login) = post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
+    let access = login["tokens"]["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (s1, before) = get_bearer(&app, "/auth/mfa", &access).await;
+    assert_eq!(s1, 200);
+    assert_eq!(before["enabled"], false);
+    assert_eq!(before["policy"], "optional");
+
+    // self-enroll via the existing setup/confirm helpers, then re-check
+    let secret = self_enroll(&app, &access).await; // helper: setup+confirm with access token
+    let _ = secret;
+    let (_s2, after) = get_bearer(&app, "/auth/mfa", &access).await;
+    assert_eq!(after["enabled"], true);
 }

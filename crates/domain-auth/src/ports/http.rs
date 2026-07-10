@@ -8,8 +8,8 @@ use crate::domain::{check_credentials, effective_scopes};
 use crate::models::{NewUser, ScopeRow, User};
 use crate::ports::dto::{
     AuthTokens, LoginRequest, LoginResponse, LogoutRequest, MfaConfirmRequest, MfaConfirmResponse,
-    MfaSetupResponse, MfaVerifyRequest, RefreshRequest, RegisterRequest, SetScopesRequest,
-    UserWithScopes,
+    MfaSetupResponse, MfaStatusResponse, MfaVerifyRequest, RefreshRequest, RegisterRequest,
+    SetScopesRequest, UserWithScopes,
 };
 use crate::ports::postgres::register_user_with_event;
 use crate::ports::MfaRepository;
@@ -74,7 +74,7 @@ pub fn router(state: AuthState) -> Router {
         .route("/auth/mfa/confirm", post(mfa_confirm))
         .route("/auth/mfa/verify", post(mfa_verify))
         .route("/auth/mfa/recovery-codes", post(mfa_regen_recovery))
-        .route("/auth/mfa", axum::routing::delete(mfa_self_disable))
+        .route("/auth/mfa", get(mfa_status).delete(mfa_self_disable))
         .route("/admin/users/:id/mfa/reset", post(admin_mfa_reset))
         .route("/scopes", get(list_scopes))
         .route("/users", get(list_users))
@@ -535,6 +535,26 @@ pub(crate) async fn mfa_regen_recovery(
         .map_err(AppError::Internal)?;
     tracing::info!(user_id = uid, "mfa recovery codes regenerated");
     Ok(Json(codes))
+}
+
+#[utoipa::path(get, path = "/auth/mfa",
+    responses((status = 200, body = MfaStatusResponse), (status = 401)),
+    security(("bearer_auth" = [])), tag = "auth")]
+pub(crate) async fn mfa_status(
+    State(state): State<AuthState>,
+    Authenticated(claims): Authenticated,
+) -> Result<Json<MfaStatusResponse>, AppError> {
+    let user_id = user_id_from_sub(&claims.sub)?;
+    let enabled = state
+        .mfa
+        .confirmed_factor(user_id)
+        .await
+        .map_err(AppError::Internal)?
+        .is_some();
+    Ok(Json(MfaStatusResponse {
+        enabled,
+        policy: state.mfa_config.policy.as_str().to_string(),
+    }))
 }
 
 #[utoipa::path(delete, path = "/auth/mfa",
