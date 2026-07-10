@@ -267,11 +267,16 @@ impl MfaRepository for PostgresUserRepository {
         .await?;
         for (id, hash) in rows {
             if crate::auth::recovery::verify_recovery_code(&hash, code) {
-                sqlx::query("update auth_mfa_recovery_code set used_at = now() where id = $1")
-                    .bind(id)
-                    .execute(&self.pool)
-                    .await?;
-                return Ok(true);
+                let res = sqlx::query(
+                    "update auth_mfa_recovery_code set used_at = now() where id = $1 and used_at is null",
+                )
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+                if res.rows_affected() == 1 {
+                    return Ok(true);
+                }
+                // else: a concurrent request already consumed this code — keep scanning.
             }
         }
         Ok(false)
