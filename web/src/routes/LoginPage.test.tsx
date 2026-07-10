@@ -135,4 +135,25 @@ describe("LoginPage", () => {
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
     expect(tokenStore.getAccessToken()).toBeNull();
   });
+
+  it("resets to the password step when MFA setup fails to start", async () => {
+    server.use(
+      http.post("/api/auth/login", () =>
+        HttpResponse.json({
+          status: "mfa_required",
+          purpose: "enroll",
+          mfa_token: "MFA",
+          factor_types: ["totp"],
+        }),
+      ),
+      http.post("/api/auth/mfa/setup", () => HttpResponse.json({ error: "boom" }, { status: 500 })),
+    );
+
+    renderPage();
+    await fillAndSubmitPassword();
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: /sign in/i })).toBeInTheDocument());
+    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
+    expect(tokenStore.getAccessToken()).toBeNull();
+  });
 });

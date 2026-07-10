@@ -32,21 +32,29 @@ export function LoginPage() {
 
   async function onPassword(e: React.FormEvent) {
     e.preventDefault(); setBusy(true);
+    let ch: MfaChallenge | null;
     try {
-      const ch = await login(email, password);
-      if (!ch) { navigate("/"); return; }
-      setChallenge(ch);
-      if (ch.purpose === "enroll") {
-        const s = await mfa.mfaSetup(ch.mfa_token);
-        setSetup(s);
-      }
+      ch = await login(email, password);
     } catch (e) {
       toast.error("Invalid credentials" + refSuffix(e));
-    } finally { setBusy(false); }
+      setBusy(false);
+      return;
+    }
+    if (!ch) { navigate("/"); setBusy(false); return; }
+    setChallenge(ch);
+    if (ch.purpose === "enroll") {
+      try {
+        const s = await mfa.mfaSetup(ch.mfa_token);
+        setSetup(s);
+      } catch (e) {
+        resetToPassword("Couldn't start MFA setup — please sign in again", e);
+      }
+    }
+    setBusy(false);
   }
 
   async function onVerify() {
-    if (!challenge) return; setBusy(true);
+    if (!challenge || busy) return; setBusy(true);
     try {
       const tokens = await mfa.mfaVerify(code, challenge.mfa_token);
       applySession(tokens); navigate("/");
@@ -55,7 +63,7 @@ export function LoginPage() {
   }
 
   async function onConfirmEnroll(c: string) {
-    if (!challenge) return; setBusy(true);
+    if (!challenge || busy) return; setBusy(true);
     try {
       const res = await mfa.mfaConfirm(c, challenge.mfa_token);
       if (res.tokens) setRecovery({ codes: res.recovery_codes, tokens: res.tokens });
@@ -85,6 +93,10 @@ export function LoginPage() {
             <Button className="w-full" disabled={busy || !code} onClick={onVerify}>Verify</Button>
           </div>
         </>)}
+
+        {challenge?.purpose === "enroll" && !setup && !recovery && (
+          <p className="text-sm text-muted-foreground">Setting up two-factor authentication…</p>
+        )}
 
         {challenge?.purpose === "enroll" && setup && !recovery && (<>
           <h1 className="mb-4 text-xl font-semibold">Set up two-factor authentication</h1>
