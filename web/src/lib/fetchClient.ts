@@ -47,13 +47,18 @@ interface Opts {
   method?: string;
   body?: unknown;
   auth?: boolean; // default true
+  bearer?: string; // explicit token (e.g. an mfa_token); skips access-token + refresh
 }
 
 async function raw(path: string, opts: Opts, cid: string): Promise<Response> {
   const headers: Record<string, string> = { "x-correlation-id": cid };
   if (opts.body !== undefined) headers["content-type"] = "application/json";
-  const token = tokenStore.getAccessToken();
-  if (opts.auth !== false && token) headers["authorization"] = `Bearer ${token}`;
+  if (opts.bearer) {
+    headers["authorization"] = `Bearer ${opts.bearer}`;
+  } else if (opts.auth !== false) {
+    const token = tokenStore.getAccessToken();
+    if (token) headers["authorization"] = `Bearer ${token}`;
+  }
   return fetch(`${BASE}${path}`, {
     method: opts.method ?? "GET",
     headers,
@@ -65,7 +70,7 @@ export async function apiFetch<T>(path: ApiPath, opts: Opts = {}): Promise<T> {
   const cid = newSegment();
   let res = await raw(path, opts, cid);
 
-  if (res.status === 401 && opts.auth !== false) {
+  if (res.status === 401 && opts.auth !== false && !opts.bearer) {
     // single-flight refresh
     refreshing ??= refreshAccessToken().finally(() => { refreshing = null; });
     const ok = await refreshing;
