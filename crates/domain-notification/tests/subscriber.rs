@@ -30,6 +30,7 @@ async fn sends_and_records_then_is_idempotent(pool: sqlx::PgPool) {
     let row = repo.find_by_event_id(10).await.unwrap().unwrap();
     assert_eq!(row.recipient, "a@b.c");
     assert_eq!(row.template, "welcome");
+    assert_eq!(row.subject, "Welcome");
     assert_eq!(row.created_by_cid, "root.ab.cd");
 
     // Redelivery is a no-op.

@@ -6,6 +6,7 @@ fn new_row(event_id: i64) -> NewSentNotification {
     NewSentNotification {
         source_event_id: event_id,
         template: "welcome".into(),
+        subject: "Welcome".into(),
         channel: "email".into(),
         recipient: "a@b.c".into(),
         body: "hi".into(),
@@ -22,5 +23,6 @@ async fn record_find_list(pool: sqlx::PgPool) {
     let found = repo.find_by_event_id(42).await.unwrap().unwrap();
     assert_eq!(found.recipient, "a@b.c");
     assert_eq!(found.source_event_id, 42);
+    assert_eq!(found.subject, "Welcome");
     assert_eq!(repo.list().await.unwrap().len(), 1);
 }
