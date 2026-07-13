@@ -20,6 +20,19 @@ pub struct AuthTokens {
     pub expires_in: i64,
 }
 
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum LoginResponse {
+    Authenticated {
+        tokens: AuthTokens,
+    },
+    MfaRequired {
+        purpose: String,
+        mfa_token: String,
+        factor_types: Vec<String>,
+    },
+}
+
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct RefreshRequest {
     pub refresh_token: String,
@@ -42,4 +55,33 @@ pub struct UserWithScopes {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct SetScopesRequest {
     pub scopes: Vec<String>,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct MfaSetupResponse {
+    pub provisioning_uri: String,
+    pub secret: String,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct MfaConfirmRequest {
+    pub code: String,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct MfaConfirmResponse {
+    pub recovery_codes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<AuthTokens>,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct MfaVerifyRequest {
+    pub code: String,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct MfaStatusResponse {
+    pub enabled: bool,
+    pub policy: String,
 }

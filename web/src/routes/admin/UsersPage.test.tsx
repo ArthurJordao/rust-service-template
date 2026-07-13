@@ -33,4 +33,22 @@ describe("UsersPage", () => {
 
     await waitFor(() => expect(putBody).toEqual({ scopes: expect.arrayContaining(["read:accounts:own", "admin"]) }));
   });
+
+  it("resets a user's MFA after confirmation", async () => {
+    let resetCalled = false;
+    server.use(
+      http.get("/api/users", () => HttpResponse.json([{ id: 1, email: "a@b.c", scopes: ["read:accounts:own"] }])),
+      http.get("/api/scopes", () => HttpResponse.json([])),
+      http.post("/api/admin/users/1/mfa/reset", () => { resetCalled = true; return new HttpResponse(null, { status: 204 }); }),
+    );
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("a@b.c")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByText("Reset MFA"));
+    await waitFor(() => screen.getByText("Reset this user's MFA?"));
+    await userEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => expect(resetCalled).toBe(true));
+  });
 });

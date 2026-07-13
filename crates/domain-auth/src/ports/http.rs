@@ -1,13 +1,18 @@
 use crate::auth::jwt::JwtIssuer;
+use crate::auth::jwt::MfaTokenClaims;
 use crate::auth::jwt::RefreshClaims;
+use crate::auth::mfa_crypto::MfaCipher;
 use crate::auth::password::hash_password;
+use crate::auth::totp::FactorVerifier;
 use crate::domain::{check_credentials, effective_scopes};
 use crate::models::{NewUser, ScopeRow, User};
 use crate::ports::dto::{
-    AuthTokens, LoginRequest, LogoutRequest, RefreshRequest, RegisterRequest, SetScopesRequest,
-    UserWithScopes,
+    AuthTokens, LoginRequest, LoginResponse, LogoutRequest, MfaConfirmRequest, MfaConfirmResponse,
+    MfaSetupResponse, MfaStatusResponse, MfaVerifyRequest, RefreshRequest, RegisterRequest,
+    SetScopesRequest, UserWithScopes,
 };
 use crate::ports::postgres::register_user_with_event;
+use crate::ports::MfaRepository;
 use crate::ports::RefreshTokenRepository;
 use crate::ports::ScopeRepository;
 use crate::ports::UserRepository;
@@ -16,12 +21,19 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use http::StatusCode;
 use platform::auth::{require_scope, Authenticated, JwtVerifier, RevocationChecker};
+use platform::config::MfaPolicy;
 use platform::db::Db;
 use platform::events::EventPublisher;
 use platform::metrics::Metrics;
 use platform::observability::CorrelationId;
 use platform::server::AppError;
 use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct MfaConfig {
+    pub policy: MfaPolicy,
+    pub cipher: Option<Arc<MfaCipher>>,
+}
 
 #[derive(Clone)]
 pub struct AuthState {
@@ -35,6 +47,9 @@ pub struct AuthState {
     pub revocation: Arc<dyn RevocationChecker>,
     pub admin_emails: Arc<Vec<String>>,
     pub metrics: Metrics,
+    pub mfa: Arc<dyn MfaRepository>,
+    pub mfa_verifier: Arc<dyn FactorVerifier>,
+    pub mfa_config: MfaConfig,
 }
 
 impl FromRef<AuthState> for Arc<JwtVerifier> {
@@ -55,6 +70,12 @@ pub fn router(state: AuthState) -> Router {
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh))
         .route("/auth/logout", post(logout))
+        .route("/auth/mfa/setup", post(mfa_setup))
+        .route("/auth/mfa/confirm", post(mfa_confirm))
+        .route("/auth/mfa/verify", post(mfa_verify))
+        .route("/auth/mfa/recovery-codes", post(mfa_regen_recovery))
+        .route("/auth/mfa", get(mfa_status).delete(mfa_self_disable))
+        .route("/admin/users/:id/mfa/reset", post(admin_mfa_reset))
         .route("/scopes", get(list_scopes))
         .route("/users", get(list_users))
         .route(
@@ -65,7 +86,11 @@ pub fn router(state: AuthState) -> Router {
 }
 
 /// Build access + refresh tokens for a user (refresh persistence arrives in 2b).
-pub async fn issue_token_pair(state: &AuthState, user: &User) -> Result<AuthTokens, AppError> {
+pub async fn issue_token_pair(
+    state: &AuthState,
+    user: &User,
+    amr: Vec<String>,
+) -> Result<AuthTokens, AppError> {
     let db_scopes = state
         .users
         .scope_names(user.id)
@@ -75,7 +100,7 @@ pub async fn issue_token_pair(state: &AuthState, user: &User) -> Result<AuthToke
     let now = chrono::Utc::now();
     let (access_token, _claims) = state
         .issuer
-        .issue_access(user.id, &user.email, scopes, now)
+        .issue_access(user.id, &user.email, scopes, amr, now)
         .map_err(AppError::Internal)?;
     let (jti, refresh_token, refresh_exp) = state
         .issuer
@@ -124,16 +149,16 @@ pub(crate) async fn register(
     .await
     .map_err(AppError::Internal)?;
     tracing::info!(email = %user.email, user_id = user.id, "user registered");
-    let tokens = issue_token_pair(&state, &user).await?;
+    let tokens = issue_token_pair(&state, &user, vec!["pwd".into()]).await?;
     Ok((StatusCode::CREATED, Json(tokens)))
 }
 
 #[utoipa::path(post, path = "/auth/login", request_body = LoginRequest,
-    responses((status = 200, body = AuthTokens), (status = 401)), tag = "auth")]
+    responses((status = 200, body = LoginResponse), (status = 401)), tag = "auth")]
 pub(crate) async fn login(
     State(state): State<AuthState>,
     Json(body): Json<LoginRequest>,
-) -> Result<Json<AuthTokens>, AppError> {
+) -> Result<Json<LoginResponse>, AppError> {
     let found = state
         .users
         .find_by_email(&body.email)
@@ -146,9 +171,45 @@ pub(crate) async fn login(
             return Err(e);
         }
     };
-    tracing::info!(email = %user.email, "login succeeded");
-    let tokens = issue_token_pair(&state, &user).await?;
-    Ok(Json(tokens))
+
+    let enabled = state
+        .mfa
+        .confirmed_factor(user.id)
+        .await
+        .map_err(AppError::Internal)?
+        .is_some();
+    let now = chrono::Utc::now();
+    use platform::config::MfaPolicy;
+    let response = match (state.mfa_config.policy, enabled) {
+        (MfaPolicy::Off, _) | (MfaPolicy::Optional, false) => {
+            let tokens = issue_token_pair(&state, &user, vec!["pwd".into()]).await?;
+            LoginResponse::Authenticated { tokens }
+        }
+        (_, true) => {
+            let mfa_token = state
+                .issuer
+                .issue_mfa_token(user.id, crate::auth::jwt::MfaPurpose::Pending, now)
+                .map_err(AppError::Internal)?;
+            LoginResponse::MfaRequired {
+                purpose: "verify".into(),
+                mfa_token,
+                factor_types: vec!["totp".into()],
+            }
+        }
+        (MfaPolicy::Required, false) => {
+            let mfa_token = state
+                .issuer
+                .issue_mfa_token(user.id, crate::auth::jwt::MfaPurpose::Enroll, now)
+                .map_err(AppError::Internal)?;
+            LoginResponse::MfaRequired {
+                purpose: "enroll".into(),
+                mfa_token,
+                factor_types: vec!["totp".into()],
+            }
+        }
+    };
+    tracing::info!(email = %user.email, "login processed");
+    Ok(Json(response))
 }
 
 #[utoipa::path(post, path = "/auth/refresh", request_body = RefreshRequest,
@@ -189,7 +250,7 @@ pub(crate) async fn refresh(
     let now = chrono::Utc::now();
     let (access_token, _claims) = state
         .issuer
-        .issue_access(user.id, &user.email, scopes, now)
+        .issue_access(user.id, &user.email, scopes, vec!["pwd".into()], now)
         .map_err(AppError::Internal)?;
     Ok(Json(AuthTokens {
         access_token,
@@ -233,6 +294,351 @@ pub(crate) async fn logout(
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Resolve the acting user from either a normal access token or an mfa-token whose
+/// token_type is in `allowed` (e.g. ["mfa_enroll"]). Returns (user_id, from_mfa_token).
+async fn mfa_user_id(
+    state: &AuthState,
+    headers: &http::HeaderMap,
+    allowed: &[&str],
+) -> Result<(i64, bool), AppError> {
+    let token = headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or_else(|| AppError::Unauthorized("missing Bearer token".into()))?;
+    // Try an access token first.
+    if let Ok(claims) = state.verifier.verify(token) {
+        if claims.token_type == "user" {
+            if state
+                .revocation
+                .is_revoked(&claims)
+                .await
+                .map_err(AppError::Internal)?
+            {
+                return Err(AppError::Unauthorized("token revoked".into()));
+            }
+            let id = claims
+                .sub
+                .strip_prefix("user-")
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| AppError::Unauthorized("bad sub".into()))?;
+            return Ok((id, false));
+        }
+    }
+    // Else an mfa-token of an allowed type.
+    let claims: MfaTokenClaims = state.verifier.decode(token)?;
+    if !allowed.contains(&claims.token_type.as_str()) {
+        return Err(AppError::Unauthorized("wrong token for this step".into()));
+    }
+    let id = claims
+        .sub
+        .strip_prefix("user-")
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| AppError::Unauthorized("bad sub".into()))?;
+    Ok((id, true))
+}
+
+fn cipher(state: &AuthState) -> Result<&MfaCipher, AppError> {
+    state
+        .mfa_config
+        .cipher
+        .as_deref()
+        .ok_or_else(|| AppError::Conflict("MFA is disabled".into()))
+}
+
+#[utoipa::path(post, path = "/auth/mfa/setup", responses((status = 200, body = MfaSetupResponse)), tag = "auth")]
+pub(crate) async fn mfa_setup(
+    State(state): State<AuthState>,
+    headers: http::HeaderMap,
+) -> Result<Json<MfaSetupResponse>, AppError> {
+    let (user_id, _) = mfa_user_id(&state, &headers, &["mfa_enroll"]).await?;
+    let user = state
+        .users
+        .find_by_id(user_id)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::Unauthorized("user not found".into()))?;
+    let secret = state.mfa_verifier.generate_secret();
+    let uri = state
+        .mfa_verifier
+        .provisioning_uri(&secret, &user.email)
+        .map_err(AppError::Internal)?;
+    let enc = cipher(&state)?
+        .encrypt(&secret)
+        .map_err(AppError::Internal)?;
+    state
+        .mfa
+        .upsert_unconfirmed_factor(user_id, "totp", &enc)
+        .await
+        .map_err(AppError::Internal)?;
+    tracing::info!(user_id, "mfa setup initiated");
+    Ok(Json(MfaSetupResponse {
+        provisioning_uri: uri,
+        secret,
+    }))
+}
+
+#[utoipa::path(post, path = "/auth/mfa/confirm", request_body = MfaConfirmRequest,
+    responses((status = 200, body = MfaConfirmResponse)), tag = "auth")]
+pub(crate) async fn mfa_confirm(
+    State(state): State<AuthState>,
+    headers: http::HeaderMap,
+    Json(body): Json<MfaConfirmRequest>,
+) -> Result<Json<MfaConfirmResponse>, AppError> {
+    let (user_id, from_mfa_token) = mfa_user_id(&state, &headers, &["mfa_enroll"]).await?;
+    let factor = state
+        .mfa
+        .get_factor(user_id, "totp")
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::BadRequest("no pending factor; call setup first".into()))?;
+    let secret = cipher(&state)?
+        .decrypt(&factor.secret_encrypted)
+        .map_err(AppError::Internal)?;
+    if !state
+        .mfa_verifier
+        .verify(&secret, &body.code, chrono::Utc::now())
+    {
+        return Err(AppError::Unauthorized("invalid code".into()));
+    }
+    state
+        .mfa
+        .confirm_factor(user_id, "totp")
+        .await
+        .map_err(AppError::Internal)?;
+
+    // fresh recovery codes (shown once)
+    let codes = crate::auth::recovery::generate_recovery_codes();
+    let hashes: Vec<String> = codes
+        .iter()
+        .map(|c| crate::auth::recovery::hash_recovery_code(c))
+        .collect::<anyhow::Result<_>>()
+        .map_err(AppError::Internal)?;
+    state
+        .mfa
+        .store_recovery_codes(user_id, &hashes)
+        .await
+        .map_err(AppError::Internal)?;
+
+    let tokens = if from_mfa_token {
+        let user = state
+            .users
+            .find_by_id(user_id)
+            .await
+            .map_err(AppError::Internal)?
+            .ok_or_else(|| AppError::Unauthorized("user not found".into()))?;
+        Some(issue_token_pair(&state, &user, vec!["pwd".into(), "totp".into()]).await?)
+    } else {
+        None // self-enroll: caller already holds a valid access token
+    };
+    tracing::info!(user_id, "mfa confirmed");
+    Ok(Json(MfaConfirmResponse {
+        recovery_codes: codes,
+        tokens,
+    }))
+}
+
+const MFA_MAX_ATTEMPTS: i32 = 5;
+const MFA_LOCK_MINUTES: i64 = 15;
+
+#[utoipa::path(post, path = "/auth/mfa/verify", request_body = MfaVerifyRequest,
+    responses((status = 200, body = AuthTokens), (status = 401)), tag = "auth")]
+pub(crate) async fn mfa_verify(
+    State(state): State<AuthState>,
+    headers: http::HeaderMap,
+    Json(body): Json<MfaVerifyRequest>,
+) -> Result<Json<AuthTokens>, AppError> {
+    let (user_id, from_mfa_token) = mfa_user_id(&state, &headers, &["mfa_pending"]).await?;
+    if !from_mfa_token {
+        return Err(AppError::Unauthorized(
+            "an mfa_pending token is required".into(),
+        ));
+    }
+    let factor = state
+        .mfa
+        .confirmed_factor(user_id)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::BadRequest("no confirmed factor".into()))?;
+    let now = chrono::Utc::now();
+    if factor.locked_until.map(|t| t > now).unwrap_or(false) {
+        return Err(AppError::Unauthorized(
+            "too many attempts; try later".into(),
+        ));
+    }
+    let secret = cipher(&state)?
+        .decrypt(&factor.secret_encrypted)
+        .map_err(AppError::Internal)?;
+
+    let (ok, amr_factor) = if state.mfa_verifier.verify(&secret, &body.code, now) {
+        (true, "totp")
+    } else if state
+        .mfa
+        .consume_recovery_code(user_id, &body.code)
+        .await
+        .map_err(AppError::Internal)?
+    {
+        (true, "recovery")
+    } else {
+        (false, "")
+    };
+
+    if !ok {
+        let next = factor.failed_attempts + 1;
+        let lock =
+            (next >= MFA_MAX_ATTEMPTS).then(|| now + chrono::Duration::minutes(MFA_LOCK_MINUTES));
+        state
+            .mfa
+            .record_failed_attempt(factor.id, lock)
+            .await
+            .map_err(AppError::Internal)?;
+        tracing::warn!(user_id, "mfa verify failed");
+        return Err(AppError::Unauthorized("invalid code".into()));
+    }
+
+    state
+        .mfa
+        .reset_attempts(factor.id)
+        .await
+        .map_err(AppError::Internal)?;
+    let user = state
+        .users
+        .find_by_id(user_id)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or_else(|| AppError::Unauthorized("user not found".into()))?;
+    tracing::info!(user_id, amr = amr_factor, "mfa verified");
+    let tokens = issue_token_pair(&state, &user, vec!["pwd".into(), amr_factor.into()]).await?;
+    Ok(Json(tokens))
+}
+
+#[utoipa::path(post, path = "/auth/mfa/recovery-codes",
+    responses((status = 200, body = [String]), (status = 401)),
+    security(("bearer_auth" = [])), tag = "auth")]
+pub(crate) async fn mfa_regen_recovery(
+    State(state): State<AuthState>,
+    Authenticated(claims): Authenticated,
+) -> Result<Json<Vec<String>>, AppError> {
+    let uid = user_id_from_sub(&claims.sub)?;
+    let codes = crate::auth::recovery::generate_recovery_codes();
+    let hashes: Vec<String> = codes
+        .iter()
+        .map(|c| crate::auth::recovery::hash_recovery_code(c))
+        .collect::<anyhow::Result<_>>()
+        .map_err(AppError::Internal)?;
+    state
+        .mfa
+        .store_recovery_codes(uid, &hashes)
+        .await
+        .map_err(AppError::Internal)?;
+    tracing::info!(user_id = uid, "mfa recovery codes regenerated");
+    Ok(Json(codes))
+}
+
+#[utoipa::path(get, path = "/auth/mfa",
+    responses((status = 200, body = MfaStatusResponse), (status = 401)),
+    security(("bearer_auth" = [])), tag = "auth")]
+pub(crate) async fn mfa_status(
+    State(state): State<AuthState>,
+    Authenticated(claims): Authenticated,
+) -> Result<Json<MfaStatusResponse>, AppError> {
+    let user_id = user_id_from_sub(&claims.sub)?;
+    let enabled = state
+        .mfa
+        .confirmed_factor(user_id)
+        .await
+        .map_err(AppError::Internal)?
+        .is_some();
+    Ok(Json(MfaStatusResponse {
+        enabled,
+        policy: state.mfa_config.policy.as_str().to_string(),
+    }))
+}
+
+#[utoipa::path(delete, path = "/auth/mfa",
+    responses((status = 204), (status = 401), (status = 409)),
+    security(("bearer_auth" = [])), tag = "auth")]
+pub(crate) async fn mfa_self_disable(
+    State(state): State<AuthState>,
+    Authenticated(claims): Authenticated,
+) -> Result<StatusCode, AppError> {
+    if state.mfa_config.policy == platform::config::MfaPolicy::Required {
+        return Err(AppError::Conflict(
+            "cannot disable MFA under required policy".into(),
+        ));
+    }
+    let uid = user_id_from_sub(&claims.sub)?;
+    state
+        .mfa
+        .delete_factors(uid)
+        .await
+        .map_err(AppError::Internal)?;
+    state
+        .mfa
+        .delete_recovery_codes(uid)
+        .await
+        .map_err(AppError::Internal)?;
+    tracing::info!(user_id = uid, "mfa self-disabled");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(post, path = "/admin/users/{id}/mfa/reset",
+    params(("id" = i64, Path,)),
+    responses((status = 204), (status = 401), (status = 403)),
+    security(("bearer_auth" = [])), tag = "admin")]
+pub(crate) async fn admin_mfa_reset(
+    State(state): State<AuthState>,
+    Authenticated(claims): Authenticated,
+    CorrelationId(cid): CorrelationId,
+    Path(target): Path<i64>,
+) -> Result<StatusCode, AppError> {
+    require_scope(&claims, "admin")?;
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    sqlx::query("delete from auth_mfa_factor where user_id = $1")
+        .bind(target)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    sqlx::query("delete from auth_mfa_recovery_code where user_id = $1")
+        .bind(target)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    let admin_id = user_id_from_sub(&claims.sub)?;
+    state
+        .publisher
+        .publish(
+            &mut tx,
+            platform::events::NewEvent {
+                event_type: "user.mfa_reset".into(),
+                aggregate_id: target.to_string(),
+                payload: serde_json::json!({ "admin_user_id": admin_id, "target_user_id": target }),
+                correlation_id: cid.clone(),
+            },
+        )
+        .await
+        .map_err(AppError::Internal)?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    tracing::warn!(
+        admin_user_id = admin_id,
+        target_user_id = target,
+        "mfa reset by admin"
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn user_id_from_sub(sub: &str) -> Result<i64, AppError> {
+    sub.strip_prefix("user-")
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| AppError::Unauthorized("bad sub".into()))
 }
 
 #[utoipa::path(get, path = "/scopes",

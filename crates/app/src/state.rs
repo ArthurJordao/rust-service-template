@@ -10,6 +10,9 @@ use domain_account::ports::events::AccountSubscriber;
 use domain_account::ports::postgres::PostgresAccountRepository;
 use domain_account::AccountState;
 use domain_auth::auth::jwt::JwtIssuer;
+use domain_auth::auth::mfa_crypto::MfaCipher;
+use domain_auth::auth::totp::TotpVerifier;
+use domain_auth::ports::http::MfaConfig;
 use domain_auth::ports::postgres::PostgresUserRepository;
 use domain_auth::ports::revocation::PostgresRevocationChecker;
 use domain_auth::AuthState;
@@ -20,7 +23,7 @@ use domain_notification::ports::templates::Templates;
 use domain_notification::NotificationState;
 use governor::middleware::NoOpMiddleware;
 use platform::auth::{JwtVerifier, RevocationChecker};
-use platform::config::Settings;
+use platform::config::{MfaPolicy, Settings};
 use platform::db::{self, Db};
 use platform::events::{
     dlq_http::{dlq_router, DlqState},
@@ -118,6 +121,8 @@ pub struct Resources {
     pub admin_emails: Arc<Vec<String>>,
     pub metrics: Metrics,
     pub revocation: Arc<dyn RevocationChecker>,
+    pub mfa_policy: MfaPolicy,
+    pub mfa_cipher: Option<Arc<MfaCipher>>,
 }
 
 /// Static routing table: every (event_type, subscriber_name) pair the system
@@ -155,6 +160,12 @@ pub async fn build_resources(settings: Settings) -> anyhow::Result<Resources> {
     let metrics = Metrics::new().context("init metrics")?;
     let revocation: Arc<dyn RevocationChecker> =
         Arc::new(PostgresRevocationChecker::new(pool.clone()));
+    let mfa_policy = settings.auth.mfa_policy();
+    let mfa_cipher = settings
+        .auth
+        .mfa_encryption_key()
+        .context("resolve MFA encryption key")?
+        .map(|k| Arc::new(MfaCipher::new(k)));
 
     // Linear construction (no cycle):
     // 1) publisher depends only on Routes (plain data),
@@ -187,6 +198,8 @@ pub async fn build_resources(settings: Settings) -> anyhow::Result<Resources> {
         admin_emails,
         metrics,
         revocation,
+        mfa_policy,
+        mfa_cipher,
     })
 }
 
@@ -203,6 +216,12 @@ pub fn auth_state(res: &Resources) -> AuthState {
         revocation: res.revocation.clone(),
         admin_emails: res.admin_emails.clone(),
         metrics: res.metrics.clone(),
+        mfa: repo.clone(),
+        mfa_verifier: Arc::new(TotpVerifier::new("rust-service".into())),
+        mfa_config: MfaConfig {
+            policy: res.mfa_policy,
+            cipher: res.mfa_cipher.clone(),
+        },
     }
 }
 

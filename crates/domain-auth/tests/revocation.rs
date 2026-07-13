@@ -13,6 +13,7 @@ fn claims(sub: &str, jti: &str, iat: usize) -> AccessClaims {
         jti: jti.into(),
         email: None,
         token_type: "user".into(),
+        amr: vec![],
     }
 }
 

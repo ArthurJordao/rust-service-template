@@ -57,6 +57,12 @@ async fn register_dispatches_to_account_then_notification(pool: sqlx::PgPool) {
         revocation: Arc::new(NoopRevocationChecker),
         admin_emails: Arc::new(vec![]),
         metrics: platform::metrics::Metrics::new().unwrap(),
+        mfa: user_repo.clone(),
+        mfa_verifier: Arc::new(domain_auth::auth::totp::TotpVerifier::new("test".into())),
+        mfa_config: domain_auth::ports::http::MfaConfig {
+            policy: platform::config::MfaPolicy::Off,
+            cipher: None,
+        },
     });
     let res = auth
         .oneshot(

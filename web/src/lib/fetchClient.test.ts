@@ -83,4 +83,21 @@ describe("apiFetch", () => {
     );
     await expect(apiFetch("/accounts/me")).rejects.toMatchObject({ status: 404, cid: "root.ab12cd" });
   });
+
+  it("uses the bearer override and does not refresh on 401", async () => {
+    let seenAuth: string | null = null;
+    let calls = 0;
+    server.use(
+      http.post("/api/auth/mfa/verify", ({ request }) => {
+        calls++;
+        seenAuth = request.headers.get("authorization");
+        return HttpResponse.json({ error: "nope" }, { status: 401 });
+      }),
+    );
+    await expect(
+      apiFetch("/auth/mfa/verify", { method: "POST", body: { code: "x" }, bearer: "MFA_TOKEN" }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(seenAuth).toBe("Bearer MFA_TOKEN");
+    expect(calls).toBe(1); // no refresh-retry
+  });
 });

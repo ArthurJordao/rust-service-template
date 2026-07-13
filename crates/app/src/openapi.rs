@@ -38,6 +38,11 @@ mod tests {
         for path in [
             "/auth/login",
             "/auth/register",
+            "/auth/mfa/setup",
+            "/auth/mfa/confirm",
+            "/auth/mfa/verify",
+            "/auth/mfa/recovery-codes",
+            "/admin/users/{id}/mfa/reset",
             "/accounts/me",
             "/users/{id}/scopes",
             "/admin/dlq",
@@ -47,6 +52,11 @@ mod tests {
         }
         for schema in [
             "AuthTokens",
+            "LoginResponse",
+            "MfaSetupResponse",
+            "MfaConfirmRequest",
+            "MfaConfirmResponse",
+            "MfaVerifyRequest",
             "Account",
             "DeadLetter",
             "ReplayResponse",

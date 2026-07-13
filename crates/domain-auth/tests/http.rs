@@ -27,6 +27,12 @@ fn state(pool: sqlx::PgPool) -> AuthState {
         revocation: Arc::new(platform::auth::NoopRevocationChecker),
         admin_emails: Arc::new(vec![]),
         metrics: Metrics::new().unwrap(),
+        mfa: repo.clone(),
+        mfa_verifier: Arc::new(domain_auth::auth::totp::TotpVerifier::new("test".into())),
+        mfa_config: domain_auth::ports::http::MfaConfig {
+            policy: platform::config::MfaPolicy::Off,
+            cipher: None,
+        },
     }
 }
 
@@ -80,7 +86,8 @@ async fn register_then_login(pool: sqlx::PgPool) {
     assert_eq!(login.status(), StatusCode::OK);
     let body = login.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(json["access_token"].as_str().unwrap().len() > 10);
+    assert_eq!(json["status"], "authenticated");
+    assert!(json["tokens"]["access_token"].as_str().unwrap().len() > 10);
 
     // Wrong password -> 401.
     let bad = app

@@ -147,6 +147,150 @@ impl ScopeRepository for PostgresUserRepository {
     }
 }
 
+use crate::ports::repository::{MfaFactor, MfaRepository};
+
+#[async_trait::async_trait]
+impl MfaRepository for PostgresUserRepository {
+    async fn confirmed_factor(&self, user_id: i64) -> anyhow::Result<Option<MfaFactor>> {
+        let f = sqlx::query_as::<_, MfaFactor>(
+            "select id, user_id, type, secret_encrypted, confirmed_at, failed_attempts, locked_until \
+             from auth_mfa_factor where user_id = $1 and confirmed_at is not null",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(f)
+    }
+
+    async fn get_factor(
+        &self,
+        user_id: i64,
+        factor_type: &str,
+    ) -> anyhow::Result<Option<MfaFactor>> {
+        let f = sqlx::query_as::<_, MfaFactor>(
+            "select id, user_id, type, secret_encrypted, confirmed_at, failed_attempts, locked_until \
+             from auth_mfa_factor where user_id = $1 and type = $2",
+        )
+        .bind(user_id)
+        .bind(factor_type)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(f)
+    }
+
+    async fn upsert_unconfirmed_factor(
+        &self,
+        user_id: i64,
+        factor_type: &str,
+        secret_encrypted: &[u8],
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "insert into auth_mfa_factor (user_id, type, secret_encrypted) values ($1, $2, $3) \
+             on conflict (user_id, type) do update set secret_encrypted = excluded.secret_encrypted, \
+                 confirmed_at = null, failed_attempts = 0, locked_until = null",
+        )
+        .bind(user_id)
+        .bind(factor_type)
+        .bind(secret_encrypted)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn confirm_factor(&self, user_id: i64, factor_type: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "update auth_mfa_factor set confirmed_at = now() where user_id = $1 and type = $2",
+        )
+        .bind(user_id)
+        .bind(factor_type)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_factors(&self, user_id: i64) -> anyhow::Result<()> {
+        sqlx::query("delete from auth_mfa_factor where user_id = $1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn record_failed_attempt(
+        &self,
+        factor_id: i64,
+        locked_until: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "update auth_mfa_factor set failed_attempts = failed_attempts + 1, locked_until = $2 where id = $1",
+        )
+        .bind(factor_id)
+        .bind(locked_until)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn reset_attempts(&self, factor_id: i64) -> anyhow::Result<()> {
+        sqlx::query(
+            "update auth_mfa_factor set failed_attempts = 0, locked_until = null where id = $1",
+        )
+        .bind(factor_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn store_recovery_codes(&self, user_id: i64, hashes: &[String]) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("delete from auth_mfa_recovery_code where user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        for h in hashes {
+            sqlx::query("insert into auth_mfa_recovery_code (user_id, code_hash) values ($1, $2)")
+                .bind(user_id)
+                .bind(h)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn consume_recovery_code(&self, user_id: i64, code: &str) -> anyhow::Result<bool> {
+        let rows: Vec<(i64, String)> = sqlx::query_as(
+            "select id, code_hash from auth_mfa_recovery_code where user_id = $1 and used_at is null",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+        for (id, hash) in rows {
+            if crate::auth::recovery::verify_recovery_code(&hash, code) {
+                let res = sqlx::query(
+                    "update auth_mfa_recovery_code set used_at = now() where id = $1 and used_at is null",
+                )
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+                if res.rows_affected() == 1 {
+                    return Ok(true);
+                }
+                // else: a concurrent request already consumed this code — keep scanning.
+            }
+        }
+        Ok(false)
+    }
+
+    async fn delete_recovery_codes(&self, user_id: i64) -> anyhow::Result<()> {
+        sqlx::query("delete from auth_mfa_recovery_code where user_id = $1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
 /// Insert a user, seed default scopes, and publish `user.registered` atomically.
 pub async fn register_user_with_event(
     pool: &Db,

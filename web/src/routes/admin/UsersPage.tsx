@@ -2,6 +2,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { useUsers } from "@/api/hooks";
 import { EditScopesDialog } from "@/routes/admin/EditScopesDialog";
+import { ResetMfaDialog } from "@/routes/admin/ResetMfaDialog";
 
 export function UsersPage() {
   const { data, isLoading, error } = useUsers();
@@ -20,7 +21,10 @@ export function UsersPage() {
               <TableCell>{u.id}</TableCell>
               <TableCell>{u.email}</TableCell>
               <TableCell className="space-x-1">{u.scopes.map((s) => <Badge key={s} variant="secondary">{s}</Badge>)}</TableCell>
-              <TableCell className="text-right"><EditScopesDialog user={u} /></TableCell>
+              <TableCell className="text-right space-x-2">
+                <EditScopesDialog user={u} />
+                <ResetMfaDialog userId={u.id} />
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>

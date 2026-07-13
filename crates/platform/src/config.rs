@@ -1,6 +1,40 @@
 use anyhow::Context;
 use serde::Deserialize;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MfaPolicy {
+    Off,
+    Optional,
+    #[default]
+    Required,
+}
+
+impl MfaPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MfaPolicy::Off => "off",
+            MfaPolicy::Optional => "optional",
+            MfaPolicy::Required => "required",
+        }
+    }
+}
+
+impl std::str::FromStr for MfaPolicy {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> anyhow::Result<MfaPolicy> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" => Ok(MfaPolicy::Off),
+            "optional" => Ok(MfaPolicy::Optional),
+            "required" => Ok(MfaPolicy::Required),
+            other => anyhow::bail!("invalid mfa_policy '{other}' (off|optional|required)"),
+        }
+    }
+}
+
+fn default_mfa_policy() -> String {
+    "required".to_string()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerSettings {
     pub port: u16,
@@ -93,6 +127,12 @@ pub struct AuthSettings {
     pub refresh_token_ttl_days: i64,
     #[serde(default)]
     pub admin_emails: String,
+    #[serde(default = "default_mfa_policy")]
+    pub mfa_policy: String,
+    #[serde(default)]
+    pub mfa_encryption_key_file: String,
+    #[serde(default)]
+    pub mfa_encryption_key_base32: String,
 }
 
 /// Resolve a key PEM: read the file if a path is set, else use the inline PEM,
@@ -139,6 +179,37 @@ impl AuthSettings {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect()
+    }
+
+    pub fn mfa_policy(&self) -> MfaPolicy {
+        self.mfa_policy.parse().unwrap_or(MfaPolicy::Required)
+    }
+
+    /// Resolve the 32-byte MFA encryption key. `Ok(None)` only when policy is Off.
+    /// File path wins over inline base32; errors if policy != Off and no key resolves
+    /// or the decoded key is not 32 bytes.
+    pub fn mfa_encryption_key(&self) -> anyhow::Result<Option<[u8; 32]>> {
+        if self.mfa_policy() == MfaPolicy::Off {
+            return Ok(None);
+        }
+        let key_str = if !self.mfa_encryption_key_file.is_empty() {
+            std::fs::read_to_string(&self.mfa_encryption_key_file).with_context(|| {
+                format!("reading MFA key file '{}'", self.mfa_encryption_key_file)
+            })?
+        } else if !self.mfa_encryption_key_base32.is_empty() {
+            self.mfa_encryption_key_base32.clone()
+        } else {
+            anyhow::bail!(
+                "mfa_policy != off but no MFA encryption key (set APP__AUTH__MFA_ENCRYPTION_KEY_FILE or _BASE32)"
+            );
+        };
+        let bytes = base32::decode(base32::Alphabet::Rfc4648 { padding: false }, key_str.trim())
+            .ok_or_else(|| anyhow::anyhow!("MFA encryption key is not valid base32"))?;
+        let arr: [u8; 32] = bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("MFA encryption key must decode to exactly 32 bytes"))?;
+        Ok(Some(arr))
     }
 }
 
@@ -206,6 +277,9 @@ mod tests {
             access_token_ttl_seconds: 900,
             refresh_token_ttl_days: 7,
             admin_emails: String::new(),
+            mfa_policy: "required".into(),
+            mfa_encryption_key_file: String::new(),
+            mfa_encryption_key_base32: String::new(),
         }
     }
 
@@ -257,5 +331,23 @@ mod tests {
         assert_eq!(s.database.max_lifetime_seconds, 1800);
         assert_eq!(s.database.statement_timeout_ms, 10_000);
         assert_eq!(s.database.lock_timeout_ms, 5_000);
+    }
+
+    #[test]
+    fn mfa_policy_parses_and_defaults_required() {
+        assert!(matches!(
+            "off".parse::<MfaPolicy>().unwrap(),
+            MfaPolicy::Off
+        ));
+        assert!(matches!(
+            "optional".parse::<MfaPolicy>().unwrap(),
+            MfaPolicy::Optional
+        ));
+        assert!(matches!(
+            "required".parse::<MfaPolicy>().unwrap(),
+            MfaPolicy::Required
+        ));
+        assert!(matches!(MfaPolicy::default(), MfaPolicy::Required));
+        assert!("bogus".parse::<MfaPolicy>().is_err());
     }
 }

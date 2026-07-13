@@ -3,4 +3,6 @@ pub mod http;
 pub mod postgres;
 pub mod repository;
 pub mod revocation;
-pub use repository::{RefreshTokenRepository, ScopeRepository, UserRepository};
+pub use repository::{
+    MfaFactor, MfaRepository, RefreshTokenRepository, ScopeRepository, UserRepository,
+};

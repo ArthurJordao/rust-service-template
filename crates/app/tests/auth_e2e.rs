@@ -40,6 +40,12 @@ async fn register_then_dispatch_creates_account(pool: sqlx::PgPool) {
         revocation: Arc::new(platform::auth::NoopRevocationChecker),
         admin_emails: Arc::new(vec![]),
         metrics: Metrics::new().unwrap(),
+        mfa: auth_repo.clone(),
+        mfa_verifier: Arc::new(domain_auth::auth::totp::TotpVerifier::new("test".into())),
+        mfa_config: domain_auth::ports::http::MfaConfig {
+            policy: platform::config::MfaPolicy::Off,
+            cipher: None,
+        },
     });
 
     // 1. Register publishes user.registered.

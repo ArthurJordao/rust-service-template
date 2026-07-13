@@ -26,6 +26,12 @@ fn state(pool: sqlx::PgPool) -> (AuthState, JwtIssuer) {
         revocation: Arc::new(platform::auth::NoopRevocationChecker),
         admin_emails: Arc::new(vec![]),
         metrics: Metrics::new().unwrap(),
+        mfa: repo.clone(),
+        mfa_verifier: Arc::new(domain_auth::auth::totp::TotpVerifier::new("test".into())),
+        mfa_config: domain_auth::ports::http::MfaConfig {
+            policy: platform::config::MfaPolicy::Off,
+            cipher: None,
+        },
     };
     (s, issuer)
 }
@@ -36,6 +42,7 @@ fn bearer(issuer: &JwtIssuer, scopes: &[&str]) -> String {
             1,
             "admin@x.y",
             scopes.iter().map(|s| s.to_string()).collect(),
+            vec!["pwd".into()],
             chrono::Utc::now(),
         )
         .unwrap();
