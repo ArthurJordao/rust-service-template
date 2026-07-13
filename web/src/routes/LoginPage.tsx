@@ -67,6 +67,7 @@ export function LoginPage() {
     try {
       const res = await mfa.mfaConfirm(c, challenge.mfa_token);
       if (res.tokens) setRecovery({ codes: res.recovery_codes, tokens: res.tokens });
+      else resetToPassword("Enrollment succeeded but no session was returned — please sign in again");
     } catch (e) { resetToPassword("Enrollment failed — please sign in again", e); }
     finally { setBusy(false); }
   }

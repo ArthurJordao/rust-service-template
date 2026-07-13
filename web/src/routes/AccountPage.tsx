@@ -111,7 +111,7 @@ function DisableButton() {
 export function AccountPage() {
   const { user } = useAuth();
   const { data, isLoading, error } = useMe(!!user);
-  const { data: mfa } = useMfaStatus();
+  const { data: mfa } = useMfaStatus(!!user);
 
   return (
     <div className="max-w-md">

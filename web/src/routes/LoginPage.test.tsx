@@ -136,6 +136,42 @@ describe("LoginPage", () => {
     expect(tokenStore.getAccessToken()).toBeNull();
   });
 
+  it("resets to the password step when enroll confirm succeeds but returns no tokens", async () => {
+    server.use(
+      http.post("/api/auth/login", () =>
+        HttpResponse.json({
+          status: "mfa_required",
+          purpose: "enroll",
+          mfa_token: "MFA",
+          factor_types: ["totp"],
+        }),
+      ),
+      http.post("/api/auth/mfa/setup", () =>
+        HttpResponse.json({
+          provisioning_uri: "otpauth://totp/example",
+          secret: "SECRETKEY",
+        }),
+      ),
+      http.post("/api/auth/mfa/confirm", () =>
+        HttpResponse.json({
+          recovery_codes: ["aaaaa-bbbbb", "ccccc-ddddd"],
+          tokens: null,
+        }),
+      ),
+    );
+
+    renderPage();
+    await fillAndSubmitPassword();
+
+    await waitFor(() => expect(screen.getByText(/set up two-factor authentication/i)).toBeInTheDocument());
+    await userEvent.type(screen.getByLabelText(/authentication or recovery code/i), "654321");
+    await userEvent.click(screen.getByRole("button", { name: /confirm/i }));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: /sign in/i })).toBeInTheDocument());
+    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
+    expect(tokenStore.getAccessToken()).toBeNull();
+  });
+
   it("resets to the password step when MFA setup fails to start", async () => {
     server.use(
       http.post("/api/auth/login", () =>

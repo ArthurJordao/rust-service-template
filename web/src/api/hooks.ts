@@ -34,8 +34,8 @@ export function useReplayDeadLetter() {
     onError: (e) => toast.error("Replay failed" + refSuffix(e)),
   });
 }
-export function useMfaStatus() {
-  return useQuery({ queryKey: ["mfa-status"], queryFn: mfaApi.mfaStatus });
+export function useMfaStatus(enabled: boolean) {
+  return useQuery({ queryKey: ["mfa-status"], queryFn: mfaApi.mfaStatus, enabled });
 }
 export function useRegenRecoveryCodes() {
   return useMutation({
