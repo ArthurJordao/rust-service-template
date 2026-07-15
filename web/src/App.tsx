@@ -6,6 +6,7 @@ import { RegisterPage } from "@/routes/RegisterPage";
 import { AccountPage } from "@/routes/AccountPage";
 import { UsersPage } from "@/routes/admin/UsersPage";
 import { DlqPage } from "@/routes/admin/DlqPage";
+import { NotificationsPage } from "@/routes/admin/NotificationsPage";
 
 export function App() {
   return (
@@ -19,6 +20,7 @@ export function App() {
             <Route element={<RequireAdmin />}>
               <Route path="/admin/users" element={<UsersPage />} />
               <Route path="/admin/dlq" element={<DlqPage />} />
+              <Route path="/admin/notifications" element={<NotificationsPage />} />
             </Route>
           </Route>
         </Route>

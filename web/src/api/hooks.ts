@@ -4,6 +4,7 @@ import { refSuffix } from "@/lib/errors";
 import { getMe } from "@/api/accounts";
 import { listScopes, listUsers, setUserScopes } from "@/api/users";
 import { listDeadLetters, replayDeadLetter } from "@/api/dlq";
+import { listNotifications } from "@/api/notifications";
 import * as mfaApi from "@/api/mfa";
 
 export function useMe(enabled: boolean) {
@@ -33,6 +34,9 @@ export function useReplayDeadLetter() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["dlq"] }); toast.success("Replayed"); },
     onError: (e) => toast.error("Replay failed" + refSuffix(e)),
   });
+}
+export function useNotifications(enabled: boolean) {
+  return useQuery({ queryKey: ["notifications"], queryFn: listNotifications, enabled });
 }
 export function useMfaStatus(enabled: boolean) {
   return useQuery({ queryKey: ["mfa-status"], queryFn: mfaApi.mfaStatus, enabled });
