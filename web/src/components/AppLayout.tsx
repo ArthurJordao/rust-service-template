@@ -14,6 +14,7 @@ export function AppLayout() {
           </Link>
           {isAdmin && <Link to="/admin/users">Users</Link>}
           {isAdmin && <Link to="/admin/dlq">DLQ</Link>}
+          {isAdmin && <Link to="/admin/notifications">Notifications</Link>}
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-muted-foreground">{user?.email}</span>

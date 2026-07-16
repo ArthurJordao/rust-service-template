@@ -405,6 +405,7 @@ export interface components {
             recipient: string;
             /** Format: int64 */
             source_event_id: number;
+            subject: string;
             template: string;
         };
         SetScopesRequest: {

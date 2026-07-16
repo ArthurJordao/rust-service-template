@@ -3,7 +3,7 @@ use crate::ports::repository::SentNotificationRepository;
 use platform::db::Db;
 
 const COLS: &str =
-    "id, source_event_id, template, channel, recipient, body, created_at, created_by_cid";
+    "id, source_event_id, template, subject, channel, recipient, body, created_at, created_by_cid";
 
 #[derive(Clone)]
 pub struct PostgresSentNotificationRepository {
@@ -34,11 +34,12 @@ impl SentNotificationRepository for PostgresSentNotificationRepository {
     async fn record(&self, new: NewSentNotification) -> anyhow::Result<()> {
         sqlx::query(
             "insert into sent_notification \
-             (source_event_id, template, channel, recipient, body, created_by_cid) \
-             values ($1, $2, $3, $4, $5, $6)",
+             (source_event_id, template, subject, channel, recipient, body, created_by_cid) \
+             values ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(new.source_event_id)
         .bind(&new.template)
+        .bind(&new.subject)
         .bind(&new.channel)
         .bind(&new.recipient)
         .bind(&new.body)

@@ -63,14 +63,16 @@ impl Subscriber for NotificationSubscriber {
             "welcome",
             &serde_json::json!({ "email": payload.email, "account_id": payload.account_id }),
         )?;
+        let subject = "Welcome";
         let channel = NotificationChannel::Email(payload.email.clone());
-        self.notifier.send(&channel, "Welcome", &body).await?;
+        self.notifier.send(&channel, subject, &body).await?;
 
         let (kind, recipient) = channel.parts();
         self.repo
             .record(NewSentNotification {
                 source_event_id: event.event_id,
                 template: "welcome".into(),
+                subject: subject.into(),
                 channel: kind.into(),
                 recipient: recipient.into(),
                 body,

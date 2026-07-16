@@ -5,6 +5,7 @@ pub struct SentNotification {
     pub id: i64,
     pub source_event_id: i64,
     pub template: String,
+    pub subject: String,
     pub channel: String,
     pub recipient: String,
     pub body: String,
@@ -16,6 +17,7 @@ pub struct SentNotification {
 pub struct NewSentNotification {
     pub source_event_id: i64,
     pub template: String,
+    pub subject: String,
     pub channel: String,
     pub recipient: String,
     pub body: String,
