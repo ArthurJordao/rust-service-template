@@ -345,14 +345,33 @@ async fn revoked_access_token_rejected_on_setup(pool: sqlx::PgPool) {
 async fn refresh_token_rejected_on_setup(pool: sqlx::PgPool) {
     let app = router(state_with(pool.clone(), MfaPolicy::Optional));
     register(&app, "a@b.c", "pw").await;
-    let (status, login) =
-        post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
-    assert_eq!(status, 200);
-    let refresh_token = login["tokens"]["refresh_token"].as_str().unwrap();
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"email":"a@b.c","password":"pw"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let refresh_token = res
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .find_map(|v| {
+            let s = v.to_str().ok()?;
+            s.strip_prefix("rt=")
+                .map(|rest| rest.split(';').next().unwrap_or("").to_string())
+        })
+        .expect("rt cookie set on login");
 
     // A refresh token is the wrong purpose for MFA setup: it isn't a live access
     // token and its `token_type` isn't in the enroll-token allow-list.
-    let (setup_status, _) = post_bearer(&app, "/auth/mfa/setup", refresh_token, "{}").await;
+    let (setup_status, _) = post_bearer(&app, "/auth/mfa/setup", &refresh_token, "{}").await;
     assert_eq!(setup_status, StatusCode::UNAUTHORIZED);
 }
 

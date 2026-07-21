@@ -6,6 +6,8 @@ version.workspace = true
 [dependencies]
 platform = { path = "../platform" }
 axum.workspace = true
+axum-extra.workspace = true
+time.workspace = true
 sqlx.workspace = true
 serde.workspace = true
 serde_json.workspace = true

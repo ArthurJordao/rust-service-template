@@ -54,6 +54,23 @@ async fn register_then_login(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::CREATED);
+    let register_set_cookie = res
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .find_map(|v| v.to_str().ok().filter(|s| s.starts_with("rt=")))
+        .expect("register sets an rt cookie")
+        .to_string();
+    assert!(register_set_cookie.contains("HttpOnly"));
+    assert!(register_set_cookie.contains("Secure"));
+    assert!(register_set_cookie.contains("SameSite=Strict"));
+    assert!(register_set_cookie.contains("Path=/api/auth"));
+    let register_body = res.into_body().collect().await.unwrap().to_bytes();
+    let register_json: serde_json::Value = serde_json::from_slice(&register_body).unwrap();
+    assert!(
+        register_json["refresh_token"].is_null(),
+        "refresh token must not appear in the register response body"
+    );
 
     // Duplicate email -> 409.
     let dup = app
@@ -70,7 +87,7 @@ async fn register_then_login(pool: sqlx::PgPool) {
         .unwrap();
     assert_eq!(dup.status(), StatusCode::CONFLICT);
 
-    // Login with correct password -> 200 + tokens.
+    // Login with correct password -> 200 + tokens + rt cookie.
     let login = app
         .clone()
         .oneshot(
@@ -84,10 +101,25 @@ async fn register_then_login(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(login.status(), StatusCode::OK);
+    let set_cookie = login
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .find_map(|v| v.to_str().ok().filter(|s| s.starts_with("rt=")))
+        .expect("login sets an rt cookie")
+        .to_string();
+    assert!(set_cookie.contains("HttpOnly"));
+    assert!(set_cookie.contains("Secure"));
+    assert!(set_cookie.contains("SameSite=Strict"));
+    assert!(set_cookie.contains("Path=/api/auth"));
     let body = login.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "authenticated");
     assert!(json["tokens"]["access_token"].as_str().unwrap().len() > 10);
+    assert!(
+        json["tokens"]["refresh_token"].is_null(),
+        "refresh token must not appear in the response body"
+    );
 
     // Wrong password -> 401.
     let bad = app
