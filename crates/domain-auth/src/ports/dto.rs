@@ -13,14 +13,6 @@ pub struct LoginRequest {
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct AuthTokens {
-    pub access_token: String,
-    pub refresh_token: String,
-    pub token_type: String,
-    pub expires_in: i64,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct AccessTokenResponse {
     pub access_token: String,
     pub token_type: String,
@@ -73,7 +65,7 @@ pub struct MfaConfirmRequest {
 pub struct MfaConfirmResponse {
     pub recovery_codes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tokens: Option<AuthTokens>,
+    pub tokens: Option<AccessTokenResponse>,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]

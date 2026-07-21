@@ -179,6 +179,15 @@ fn current_totp_code(secret: &str) -> String {
         .unwrap()
 }
 
+/// Extract the raw `rt` cookie value from a response's `Set-Cookie` headers, if present.
+fn rt_cookie_value(res: &axum::http::Response<Body>) -> Option<String> {
+    res.headers().get_all("set-cookie").iter().find_map(|v| {
+        let s = v.to_str().ok()?;
+        s.strip_prefix("rt=")
+            .map(|rest| rest.split(';').next().unwrap_or("").to_string())
+    })
+}
+
 /// Login (obtaining an enroll mfa-token) -> setup -> confirm. Returns the raw TOTP
 /// secret so callers can compute fresh codes for a subsequent verify step.
 async fn enroll(app: &axum::Router, email: &str, password: &str) -> String {
@@ -588,4 +597,120 @@ async fn mfa_status_reports_enabled_after_enroll(pool: sqlx::PgPool) {
     let _ = secret;
     let (_s2, after) = get_bearer(&app, "/auth/mfa", &access).await;
     assert_eq!(after["enabled"], true);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn verify_sets_refresh_cookie_and_omits_it_from_body(pool: sqlx::PgPool) {
+    let app = router(state_with(pool.clone(), MfaPolicy::Required));
+    register(&app, "a@b.c", "pw").await;
+    let secret = enroll(&app, "a@b.c", "pw").await; // helper: login->setup->confirm, returns secret
+
+    let (_s, login) = post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
+    let pending = login["mfa_token"].as_str().unwrap().to_string();
+    let code = current_totp_code(&secret);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/mfa/verify")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {pending}"))
+                .body(Body::from(format!(r#"{{"code":"{code}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        rt_cookie_value(&res).is_some(),
+        "expected an rt cookie to be set on successful verify"
+    );
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(body["access_token"].as_str().unwrap().len() > 10);
+    assert!(
+        body.get("refresh_token").is_none(),
+        "refresh token must not appear in the verify response body"
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn confirm_login_enroll_sets_refresh_cookie_and_omits_it_from_tokens(pool: sqlx::PgPool) {
+    let app = router(state_with(pool.clone(), MfaPolicy::Required));
+    register(&app, "a@b.c", "pw").await;
+    let (_s, login) = post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
+    let mfa_token = login["mfa_token"].as_str().unwrap().to_string();
+    let (s1, setup) = post_bearer(&app, "/auth/mfa/setup", &mfa_token, "{}").await;
+    assert_eq!(s1, StatusCode::OK);
+    let secret = setup["secret"].as_str().unwrap().to_string();
+    let code = current_totp_code(&secret);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/mfa/confirm")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {mfa_token}"))
+                .body(Body::from(format!(r#"{{"code":"{code}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        rt_cookie_value(&res).is_some(),
+        "expected an rt cookie to be set on login-enroll confirm"
+    );
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(body["tokens"]["access_token"].as_str().unwrap().len() > 10);
+    assert!(
+        body["tokens"].get("refresh_token").is_none(),
+        "refresh token must not appear in the confirm response tokens"
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn confirm_self_enroll_sets_no_cookie_and_omits_tokens(pool: sqlx::PgPool) {
+    let app = router(state_with(pool.clone(), MfaPolicy::Optional));
+    register(&app, "a@b.c", "pw").await;
+    let (_s, login) = post_json(&app, "/auth/login", r#"{"email":"a@b.c","password":"pw"}"#).await;
+    let access = login["tokens"]["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (s1, setup) = post_bearer(&app, "/auth/mfa/setup", &access, "{}").await;
+    assert_eq!(s1, StatusCode::OK);
+    let secret = setup["secret"].as_str().unwrap().to_string();
+    let code = current_totp_code(&secret);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/mfa/confirm")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {access}"))
+                .body(Body::from(format!(r#"{{"code":"{code}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        rt_cookie_value(&res).is_none(),
+        "self-enroll confirm must not set an rt cookie"
+    );
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        body.get("tokens").is_none(),
+        "self-enroll confirm must omit tokens entirely"
+    );
 }

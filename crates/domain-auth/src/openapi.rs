@@ -22,7 +22,6 @@ use utoipa::OpenApi;
     components(schemas(
         crate::ports::dto::RegisterRequest,
         crate::ports::dto::LoginRequest,
-        crate::ports::dto::AuthTokens,
         crate::ports::dto::AccessTokenResponse,
         crate::ports::dto::LoginResponse,
         crate::ports::dto::LogoutRequest,
