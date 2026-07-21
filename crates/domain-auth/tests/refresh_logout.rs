@@ -164,6 +164,10 @@ async fn logout_then_refresh_is_unauthorized(pool: sqlx::PgPool) {
         clear_cookie.contains("Max-Age=0"),
         "logout must clear the rt cookie: {clear_cookie}"
     );
+    assert!(clear_cookie.contains("HttpOnly"));
+    assert!(clear_cookie.contains("Secure"));
+    assert!(clear_cookie.contains("SameSite=Strict"));
+    assert!(clear_cookie.contains("Path=/api/auth"));
 
     let refresh = app
         .oneshot(
