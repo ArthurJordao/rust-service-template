@@ -12,7 +12,7 @@ import { MfaCodeInput } from "@/components/mfa/MfaCodeInput";
 import { MfaEnrollWizard } from "@/components/mfa/MfaEnrollWizard";
 import { RecoveryCodesDialog } from "@/components/mfa/RecoveryCodesDialog";
 import type { components } from "@/api/schema";
-type AuthTokens = components["schemas"]["AuthTokens"];
+type AccessTokenResponse = components["schemas"]["AccessTokenResponse"];
 
 export function LoginPage() {
   const { login, applySession } = useAuth();
@@ -23,7 +23,7 @@ export function LoginPage() {
   const [challenge, setChallenge] = useState<MfaChallenge | null>(null);
   const [setup, setSetup] = useState<{ provisioning_uri: string; secret: string } | null>(null);
   const [code, setCode] = useState("");
-  const [recovery, setRecovery] = useState<{ codes: string[]; tokens: AuthTokens } | null>(null);
+  const [recovery, setRecovery] = useState<{ codes: string[]; tokens: AccessTokenResponse } | null>(null);
 
   function resetToPassword(msg: string, e?: unknown) {
     toast.error(msg + refSuffix(e));

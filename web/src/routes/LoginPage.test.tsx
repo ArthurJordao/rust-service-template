@@ -32,7 +32,10 @@ async function fillAndSubmitPassword() {
 }
 
 describe("LoginPage", () => {
-  beforeEach(() => tokenStore.clear());
+  beforeEach(() => {
+    tokenStore.clear();
+    server.use(http.post("/api/auth/refresh", () => new HttpResponse(null, { status: 401 })));
+  });
 
   it("completes a verify-step login", async () => {
     server.use(
@@ -47,7 +50,6 @@ describe("LoginPage", () => {
       http.post("/api/auth/mfa/verify", () =>
         HttpResponse.json({
           access_token: FAKE_JWT,
-          refresh_token: "rt",
           token_type: "Bearer",
           expires_in: 900,
         }),
@@ -62,7 +64,6 @@ describe("LoginPage", () => {
     await userEvent.click(screen.getByRole("button", { name: /verify/i }));
 
     await waitFor(() => expect(screen.getByText("home")).toBeInTheDocument());
-    expect(tokenStore.getRefreshToken()).toBe("rt");
     expect(tokenStore.getAccessToken()).toBe(FAKE_JWT);
   });
 
@@ -87,7 +88,6 @@ describe("LoginPage", () => {
           recovery_codes: ["aaaaa-bbbbb", "ccccc-ddddd"],
           tokens: {
             access_token: FAKE_JWT,
-            refresh_token: "rt2",
             token_type: "Bearer",
             expires_in: 900,
           },
@@ -107,7 +107,6 @@ describe("LoginPage", () => {
     await userEvent.click(screen.getByRole("button", { name: /done/i }));
 
     await waitFor(() => expect(screen.getByText("home")).toBeInTheDocument());
-    expect(tokenStore.getRefreshToken()).toBe("rt2");
     expect(tokenStore.getAccessToken()).toBe(FAKE_JWT);
   });
 

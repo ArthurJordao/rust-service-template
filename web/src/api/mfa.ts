@@ -4,7 +4,7 @@ import type { components } from "@/api/schema";
 type MfaStatus = components["schemas"]["MfaStatusResponse"];
 type MfaSetupResponse = components["schemas"]["MfaSetupResponse"];
 type MfaConfirmResponse = components["schemas"]["MfaConfirmResponse"];
-type AuthTokens = components["schemas"]["AuthTokens"];
+type AccessTokenResponse = components["schemas"]["AccessTokenResponse"];
 
 export const mfaStatus = () => apiFetch<MfaStatus>("/auth/mfa");
 
@@ -15,7 +15,7 @@ export const mfaConfirm = (code: string, bearer?: string) =>
   apiFetch<MfaConfirmResponse>("/auth/mfa/confirm", { method: "POST", body: { code }, bearer });
 
 export const mfaVerify = (code: string, mfaToken: string) =>
-  apiFetch<AuthTokens>("/auth/mfa/verify", { method: "POST", body: { code }, bearer: mfaToken });
+  apiFetch<AccessTokenResponse>("/auth/mfa/verify", { method: "POST", body: { code }, bearer: mfaToken });
 
 export const regenRecoveryCodes = () =>
   apiFetch<string[]>("/auth/mfa/recovery-codes", { method: "POST" });

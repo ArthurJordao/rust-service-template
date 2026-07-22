@@ -51,7 +51,7 @@ mod tests {
             assert!(json.contains(path), "missing path {path}");
         }
         for schema in [
-            "AuthTokens",
+            "AccessTokenResponse",
             "LoginResponse",
             "MfaSetupResponse",
             "MfaConfirmRequest",

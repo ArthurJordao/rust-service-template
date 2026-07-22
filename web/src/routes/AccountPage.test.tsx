@@ -15,7 +15,7 @@ const TOKEN = `${btoa('{"alg":"RS256"}')}.${btoa(
 function mockSession() {
   server.use(
     http.post("/api/auth/refresh", () =>
-      HttpResponse.json({ access_token: TOKEN, refresh_token: "rt", token_type: "Bearer", expires_in: 900 }),
+      HttpResponse.json({ access_token: TOKEN, token_type: "Bearer", expires_in: 900 }),
     ),
     http.get("/api/accounts/me", () =>
       HttpResponse.json({ id: "acct-1", email: "a@b.c", created_at: new Date().toISOString() }),
@@ -24,7 +24,6 @@ function mockSession() {
 }
 
 function renderPage() {
-  tokenStore.setRefreshToken("rt");
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>

@@ -40,6 +40,10 @@ impl JwtIssuer {
         self.access_ttl_seconds
     }
 
+    pub fn refresh_ttl_seconds(&self) -> i64 {
+        self.refresh_ttl_days * 86_400
+    }
+
     /// Issue a signed access token. Returns the compact token and its claims.
     pub fn issue_access(
         &self,

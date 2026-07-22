@@ -1,3 +1,4 @@
+use crate::auth::cookie::{clear_rt_cookie, rt_cookie, RT_COOKIE};
 use crate::auth::jwt::JwtIssuer;
 use crate::auth::jwt::MfaTokenClaims;
 use crate::auth::jwt::RefreshClaims;
@@ -7,8 +8,8 @@ use crate::auth::totp::FactorVerifier;
 use crate::domain::{check_credentials, effective_scopes};
 use crate::models::{NewUser, ScopeRow, User};
 use crate::ports::dto::{
-    AuthTokens, LoginRequest, LoginResponse, LogoutRequest, MfaConfirmRequest, MfaConfirmResponse,
-    MfaSetupResponse, MfaStatusResponse, MfaVerifyRequest, RefreshRequest, RegisterRequest,
+    AccessTokenResponse, LoginRequest, LoginResponse, LogoutRequest, MfaConfirmRequest,
+    MfaConfirmResponse, MfaSetupResponse, MfaStatusResponse, MfaVerifyRequest, RegisterRequest,
     SetScopesRequest, UserWithScopes,
 };
 use crate::ports::postgres::register_user_with_event;
@@ -19,6 +20,7 @@ use crate::ports::UserRepository;
 use axum::extract::{FromRef, Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use axum_extra::extract::cookie::CookieJar;
 use http::StatusCode;
 use platform::auth::{require_scope, Authenticated, JwtVerifier, RevocationChecker};
 use platform::config::MfaPolicy;
@@ -85,12 +87,13 @@ pub fn router(state: AuthState) -> Router {
         .with_state(state)
 }
 
-/// Build access + refresh tokens for a user (refresh persistence arrives in 2b).
-pub async fn issue_token_pair(
+/// Build an access token + persist a fresh refresh token, returning the access
+/// response body and the raw refresh JWT (the caller sets it as an httpOnly cookie).
+pub async fn issue_session(
     state: &AuthState,
     user: &User,
     amr: Vec<String>,
-) -> Result<AuthTokens, AppError> {
+) -> Result<(AccessTokenResponse, String), AppError> {
     let db_scopes = state
         .users
         .scope_names(user.id)
@@ -111,21 +114,24 @@ pub async fn issue_token_pair(
         .store(&jti, user.id, refresh_exp)
         .await
         .map_err(AppError::Internal)?;
-    Ok(AuthTokens {
-        access_token,
+    Ok((
+        AccessTokenResponse {
+            access_token,
+            token_type: "Bearer".into(),
+            expires_in: state.issuer.access_ttl_seconds(),
+        },
         refresh_token,
-        token_type: "Bearer".into(),
-        expires_in: state.issuer.access_ttl_seconds(),
-    })
+    ))
 }
 
 #[utoipa::path(post, path = "/auth/register", request_body = RegisterRequest,
-    responses((status = 201, body = AuthTokens), (status = 409)), tag = "auth")]
+    responses((status = 201, body = AccessTokenResponse), (status = 409)), tag = "auth")]
 pub(crate) async fn register(
     State(state): State<AuthState>,
     CorrelationId(cid): CorrelationId,
+    jar: CookieJar,
     Json(body): Json<RegisterRequest>,
-) -> Result<(StatusCode, Json<AuthTokens>), AppError> {
+) -> Result<(StatusCode, CookieJar, Json<AccessTokenResponse>), AppError> {
     if state
         .users
         .find_by_email(&body.email)
@@ -149,16 +155,18 @@ pub(crate) async fn register(
     .await
     .map_err(AppError::Internal)?;
     tracing::info!(email = %user.email, user_id = user.id, "user registered");
-    let tokens = issue_token_pair(&state, &user, vec!["pwd".into()]).await?;
-    Ok((StatusCode::CREATED, Json(tokens)))
+    let (tokens, refresh) = issue_session(&state, &user, vec!["pwd".into()]).await?;
+    let jar = jar.add(rt_cookie(refresh, state.issuer.refresh_ttl_seconds()));
+    Ok((StatusCode::CREATED, jar, Json(tokens)))
 }
 
 #[utoipa::path(post, path = "/auth/login", request_body = LoginRequest,
     responses((status = 200, body = LoginResponse), (status = 401)), tag = "auth")]
 pub(crate) async fn login(
     State(state): State<AuthState>,
+    jar: CookieJar,
     Json(body): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, AppError> {
+) -> Result<(CookieJar, Json<LoginResponse>), AppError> {
     let found = state
         .users
         .find_by_email(&body.email)
@@ -180,9 +188,11 @@ pub(crate) async fn login(
         .is_some();
     let now = chrono::Utc::now();
     use platform::config::MfaPolicy;
+    let mut jar = jar;
     let response = match (state.mfa_config.policy, enabled) {
         (MfaPolicy::Off, _) | (MfaPolicy::Optional, false) => {
-            let tokens = issue_token_pair(&state, &user, vec!["pwd".into()]).await?;
+            let (tokens, refresh) = issue_session(&state, &user, vec!["pwd".into()]).await?;
+            jar = jar.add(rt_cookie(refresh, state.issuer.refresh_ttl_seconds()));
             LoginResponse::Authenticated { tokens }
         }
         (_, true) => {
@@ -209,16 +219,20 @@ pub(crate) async fn login(
         }
     };
     tracing::info!(email = %user.email, "login processed");
-    Ok(Json(response))
+    Ok((jar, Json(response)))
 }
 
-#[utoipa::path(post, path = "/auth/refresh", request_body = RefreshRequest,
-    responses((status = 200, body = AuthTokens), (status = 401)), tag = "auth")]
+#[utoipa::path(post, path = "/auth/refresh",
+    responses((status = 200, body = AccessTokenResponse), (status = 401)), tag = "auth")]
 pub(crate) async fn refresh(
     State(state): State<AuthState>,
-    Json(body): Json<RefreshRequest>,
-) -> Result<Json<AuthTokens>, AppError> {
-    let claims: RefreshClaims = state.verifier.decode(&body.refresh_token)?;
+    jar: CookieJar,
+) -> Result<(CookieJar, Json<AccessTokenResponse>), AppError> {
+    let refresh_token = jar
+        .get(RT_COOKIE)
+        .map(|c| c.value().to_string())
+        .ok_or_else(|| AppError::Unauthorized("missing refresh cookie".into()))?;
+    let claims: RefreshClaims = state.verifier.decode(&refresh_token)?;
     if claims.token_type != "refresh" {
         return Err(AppError::Unauthorized(
             "access token cannot be used as refresh token".into(),
@@ -252,29 +266,35 @@ pub(crate) async fn refresh(
         .issuer
         .issue_access(user.id, &user.email, scopes, vec!["pwd".into()], now)
         .map_err(AppError::Internal)?;
-    Ok(Json(AuthTokens {
-        access_token,
-        refresh_token: body.refresh_token,
-        token_type: "Bearer".into(),
-        expires_in: state.issuer.access_ttl_seconds(),
-    }))
+    let jar = jar.add(rt_cookie(refresh_token, state.issuer.refresh_ttl_seconds()));
+    Ok((
+        jar,
+        Json(AccessTokenResponse {
+            access_token,
+            token_type: "Bearer".into(),
+            expires_in: state.issuer.access_ttl_seconds(),
+        }),
+    ))
 }
 
 #[utoipa::path(post, path = "/auth/logout", request_body = LogoutRequest,
     responses((status = 204)), tag = "auth")]
 pub(crate) async fn logout(
     State(state): State<AuthState>,
+    jar: CookieJar,
     Json(body): Json<LogoutRequest>,
-) -> Result<StatusCode, AppError> {
+) -> Result<(CookieJar, StatusCode), AppError> {
     tracing::info!("logout");
     // Revoke the refresh token if it parses and has the correct type (idempotent on garbage).
-    if let Ok(claims) = state.verifier.decode::<RefreshClaims>(&body.refresh_token) {
-        if claims.token_type == "refresh" {
-            state
-                .refresh_tokens
-                .revoke(&claims.jti)
-                .await
-                .map_err(AppError::Internal)?;
+    if let Some(rt) = jar.get(RT_COOKIE) {
+        if let Ok(claims) = state.verifier.decode::<RefreshClaims>(rt.value()) {
+            if claims.token_type == "refresh" {
+                state
+                    .refresh_tokens
+                    .revoke(&claims.jti)
+                    .await
+                    .map_err(AppError::Internal)?;
+            }
         }
     }
     // Denylist the access token jti for its remaining lifetime, if supplied + valid.
@@ -293,7 +313,8 @@ pub(crate) async fn logout(
             .map_err(|e| AppError::Internal(e.into()))?;
         }
     }
-    Ok(StatusCode::NO_CONTENT)
+    let jar = jar.remove(clear_rt_cookie());
+    Ok((jar, StatusCode::NO_CONTENT))
 }
 
 /// Resolve the acting user from either a normal access token or an mfa-token whose
@@ -385,8 +406,9 @@ pub(crate) async fn mfa_setup(
 pub(crate) async fn mfa_confirm(
     State(state): State<AuthState>,
     headers: http::HeaderMap,
+    jar: CookieJar,
     Json(body): Json<MfaConfirmRequest>,
-) -> Result<Json<MfaConfirmResponse>, AppError> {
+) -> Result<(CookieJar, Json<MfaConfirmResponse>), AppError> {
     let (user_id, from_mfa_token) = mfa_user_id(&state, &headers, &["mfa_enroll"]).await?;
     let factor = state
         .mfa
@@ -422,34 +444,41 @@ pub(crate) async fn mfa_confirm(
         .await
         .map_err(AppError::Internal)?;
 
-    let tokens = if from_mfa_token {
+    let (tokens, jar) = if from_mfa_token {
         let user = state
             .users
             .find_by_id(user_id)
             .await
             .map_err(AppError::Internal)?
             .ok_or_else(|| AppError::Unauthorized("user not found".into()))?;
-        Some(issue_token_pair(&state, &user, vec!["pwd".into(), "totp".into()]).await?)
+        let (access_response, refresh) =
+            issue_session(&state, &user, vec!["pwd".into(), "totp".into()]).await?;
+        let jar = jar.add(rt_cookie(refresh, state.issuer.refresh_ttl_seconds()));
+        (Some(access_response), jar)
     } else {
-        None // self-enroll: caller already holds a valid access token
+        (None, jar) // self-enroll: caller already holds a valid access token
     };
     tracing::info!(user_id, "mfa confirmed");
-    Ok(Json(MfaConfirmResponse {
-        recovery_codes: codes,
-        tokens,
-    }))
+    Ok((
+        jar,
+        Json(MfaConfirmResponse {
+            recovery_codes: codes,
+            tokens,
+        }),
+    ))
 }
 
 const MFA_MAX_ATTEMPTS: i32 = 5;
 const MFA_LOCK_MINUTES: i64 = 15;
 
 #[utoipa::path(post, path = "/auth/mfa/verify", request_body = MfaVerifyRequest,
-    responses((status = 200, body = AuthTokens), (status = 401)), tag = "auth")]
+    responses((status = 200, body = AccessTokenResponse), (status = 401)), tag = "auth")]
 pub(crate) async fn mfa_verify(
     State(state): State<AuthState>,
     headers: http::HeaderMap,
+    jar: CookieJar,
     Json(body): Json<MfaVerifyRequest>,
-) -> Result<Json<AuthTokens>, AppError> {
+) -> Result<(CookieJar, Json<AccessTokenResponse>), AppError> {
     let (user_id, from_mfa_token) = mfa_user_id(&state, &headers, &["mfa_pending"]).await?;
     if !from_mfa_token {
         return Err(AppError::Unauthorized(
@@ -510,8 +539,10 @@ pub(crate) async fn mfa_verify(
         .map_err(AppError::Internal)?
         .ok_or_else(|| AppError::Unauthorized("user not found".into()))?;
     tracing::info!(user_id, amr = amr_factor, "mfa verified");
-    let tokens = issue_token_pair(&state, &user, vec!["pwd".into(), amr_factor.into()]).await?;
-    Ok(Json(tokens))
+    let (access_response, refresh) =
+        issue_session(&state, &user, vec!["pwd".into(), amr_factor.into()]).await?;
+    let jar = jar.add(rt_cookie(refresh, state.issuer.refresh_ttl_seconds()));
+    Ok((jar, Json(access_response)))
 }
 
 #[utoipa::path(post, path = "/auth/mfa/recovery-codes",

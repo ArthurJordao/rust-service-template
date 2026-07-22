@@ -13,9 +13,8 @@ pub struct LoginRequest {
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct AuthTokens {
+pub struct AccessTokenResponse {
     pub access_token: String,
-    pub refresh_token: String,
     pub token_type: String,
     pub expires_in: i64,
 }
@@ -24,7 +23,7 @@ pub struct AuthTokens {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum LoginResponse {
     Authenticated {
-        tokens: AuthTokens,
+        tokens: AccessTokenResponse,
     },
     MfaRequired {
         purpose: String,
@@ -34,13 +33,7 @@ pub enum LoginResponse {
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct RefreshRequest {
-    pub refresh_token: String,
-}
-
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct LogoutRequest {
-    pub refresh_token: String,
     #[serde(default)]
     pub access_token: Option<String>,
 }
@@ -72,7 +65,7 @@ pub struct MfaConfirmRequest {
 pub struct MfaConfirmResponse {
     pub recovery_codes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tokens: Option<AuthTokens>,
+    pub tokens: Option<AccessTokenResponse>,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]

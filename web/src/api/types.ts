@@ -1,6 +1,6 @@
 import type { components } from "@/api/schema";
 
-export type AuthTokens = components["schemas"]["AuthTokens"];
+export type AccessTokenResponse = components["schemas"]["AccessTokenResponse"];
 export type Account = components["schemas"]["Account"];
 export type UserWithScopes = components["schemas"]["UserWithScopes"];
 export type ScopeInfo = components["schemas"]["ScopeRow"];   // backend type is ScopeRow
