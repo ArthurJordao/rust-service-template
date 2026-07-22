@@ -312,6 +312,12 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AccessTokenResponse: {
+            access_token: string;
+            /** Format: int64 */
+            expires_in: number;
+            token_type: string;
+        };
         Account: {
             /** Format: int64 */
             auth_user_id: number;
@@ -322,13 +328,6 @@ export interface components {
             /** Format: int64 */
             id: number;
             name: string;
-        };
-        AuthTokens: {
-            access_token: string;
-            /** Format: int64 */
-            expires_in: number;
-            refresh_token: string;
-            token_type: string;
         };
         DeadLetter: {
             aggregate_id: string;
@@ -348,7 +347,7 @@ export interface components {
         LoginResponse: {
             /** @enum {string} */
             status: "authenticated";
-            tokens: components["schemas"]["AuthTokens"];
+            tokens: components["schemas"]["AccessTokenResponse"];
         } | {
             factor_types: string[];
             mfa_token: string;
@@ -358,14 +357,13 @@ export interface components {
         };
         LogoutRequest: {
             access_token?: string | null;
-            refresh_token: string;
         };
         MfaConfirmRequest: {
             code: string;
         };
         MfaConfirmResponse: {
             recovery_codes: string[];
-            tokens?: null | components["schemas"]["AuthTokens"];
+            tokens?: null | components["schemas"]["AccessTokenResponse"];
         };
         MfaSetupResponse: {
             provisioning_uri: string;
@@ -377,9 +375,6 @@ export interface components {
         };
         MfaVerifyRequest: {
             code: string;
-        };
-        RefreshRequest: {
-            refresh_token: string;
         };
         RegisterRequest: {
             email: string;
@@ -811,7 +806,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AuthTokens"];
+                    "application/json": components["schemas"]["AccessTokenResponse"];
                 };
             };
             401: {
@@ -829,18 +824,14 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RefreshRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AuthTokens"];
+                    "application/json": components["schemas"]["AccessTokenResponse"];
                 };
             };
             401: {
@@ -869,7 +860,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AuthTokens"];
+                    "application/json": components["schemas"]["AccessTokenResponse"];
                 };
             };
             409: {

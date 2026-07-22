@@ -5,7 +5,7 @@ import { setOnAuthFailure } from "@/lib/fetchClient";
 import { decodeAccessToken } from "@/lib/jwt";
 import * as authApi from "@/api/auth";
 
-type AuthTokens = components["schemas"]["AuthTokens"];
+type AccessTokenResponse = components["schemas"]["AccessTokenResponse"];
 export interface MfaChallenge { mfa_token: string; purpose: string; factor_types: string[]; }
 
 interface User { email?: string; scopes: string[]; }
@@ -14,7 +14,7 @@ interface AuthCtx {
   isAdmin: boolean;
   status: "loading" | "ready";
   login: (email: string, password: string) => Promise<MfaChallenge | null>;
-  applySession: (tokens: AuthTokens) => void;
+  applySession: (tokens: AccessTokenResponse) => void;
   register: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -29,26 +29,21 @@ function userFromAccess(token: string | null): User | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [status, setStatus] = useState<"loading" | "ready">(
-    () => (tokenStore.getRefreshToken() ? "loading" : "ready"),
-  );
+  const [status, setStatus] = useState<"loading" | "ready">("loading");
 
-  function applyTokens(access: string, refresh: string) {
+  function applyTokens(access: string) {
     tokenStore.setAccessToken(access);
-    tokenStore.setRefreshToken(refresh);
     setUser(userFromAccess(access));
   }
 
   useEffect(() => {
     setOnAuthFailure(() => { tokenStore.clear(); setUser(null); });
-    const refresh = tokenStore.getRefreshToken();
-    if (!refresh) return;
     fetch(`${import.meta.env.VITE_API_BASE_URL ?? "/api"}/auth/refresh`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ refresh_token: refresh }),
+      method: "POST",
+      credentials: "include",
     })
       .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((d) => applyTokens(d.access_token, d.refresh_token ?? refresh))
+      .then((d) => applyTokens(d.access_token))
       .catch(() => { tokenStore.clear(); setUser(null); })
       .finally(() => setStatus("ready"));
   }, []);
@@ -60,19 +55,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     login: async (email, password) => {
       const res = await authApi.login(email, password);
       if (res.status === "authenticated") {
-        applyTokens(res.tokens.access_token, res.tokens.refresh_token);
+        applyTokens(res.tokens.access_token);
         return null;
       }
       return { mfa_token: res.mfa_token, purpose: res.purpose, factor_types: res.factor_types };
     },
-    applySession: (tokens) => applyTokens(tokens.access_token, tokens.refresh_token),
+    applySession: (tokens) => applyTokens(tokens.access_token),
     register: async (email, password) => {
       const t = await authApi.register(email, password);
-      applyTokens(t.access_token, t.refresh_token);
+      applyTokens(t.access_token);
     },
     logout: async () => {
-      const refresh = tokenStore.getRefreshToken();
-      try { if (refresh) await authApi.logout(refresh, tokenStore.getAccessToken()); } catch { /* ignore */ }
+      try { await authApi.logout(tokenStore.getAccessToken()); } catch { /* ignore */ }
       tokenStore.clear();
       setUser(null);
     },

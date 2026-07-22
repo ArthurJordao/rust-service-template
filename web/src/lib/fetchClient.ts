@@ -29,17 +29,10 @@ export function setOnAuthFailure(fn: () => void) { onAuthFailure = fn; }
 let refreshing: Promise<boolean> | null = null;
 
 async function refreshAccessToken(): Promise<boolean> {
-  const refresh = tokenStore.getRefreshToken();
-  if (!refresh) return false;
-  const res = await fetch(`${BASE}/auth/refresh`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ refresh_token: refresh }),
-  });
+  const res = await fetch(`${BASE}/auth/refresh`, { method: "POST", credentials: "include" });
   if (!res.ok) return false;
   const data = await res.json();
   tokenStore.setAccessToken(data.access_token);
-  if (data.refresh_token) tokenStore.setRefreshToken(data.refresh_token);
   return true;
 }
 
@@ -63,6 +56,7 @@ async function raw(path: string, opts: Opts, cid: string): Promise<Response> {
     method: opts.method ?? "GET",
     headers,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    credentials: "include",
   });
 }
 

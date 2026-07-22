@@ -7,35 +7,39 @@ import { tokenStore } from "@/auth/tokenStore";
 describe("apiFetch", () => {
   beforeEach(() => tokenStore.clear());
 
-  it("attaches bearer and returns json", async () => {
+  it("attaches bearer, sends credentials, and returns json", async () => {
     tokenStore.setAccessToken("at-1");
     server.use(http.get("/api/accounts/me", ({ request }) => {
       expect(request.headers.get("authorization")).toBe("Bearer at-1");
+      expect(request.credentials).toBe("include");
       return HttpResponse.json({ email: "a@b.c" });
     }));
     const res = await apiFetch<{ email: string }>("/accounts/me");
     expect(res.email).toBe("a@b.c");
   });
 
-  it("on 401, refreshes once and retries", async () => {
+  it("on 401, refreshes once (no body) and retries", async () => {
     tokenStore.setAccessToken("stale");
-    tokenStore.setRefreshToken("rt-1");
     let calls = 0;
+    let refreshBody = "";
     server.use(
       http.get("/api/accounts/me", ({ request }) => {
         const auth = request.headers.get("authorization");
         if (auth === "Bearer stale") return new HttpResponse(null, { status: 401 });
         return HttpResponse.json({ email: "ok@b.c" });
       }),
-      http.post("/api/auth/refresh", () => {
+      http.post("/api/auth/refresh", async ({ request }) => {
         calls++;
-        return HttpResponse.json({ access_token: "fresh", refresh_token: "rt-1", token_type: "Bearer", expires_in: 900 });
+        refreshBody = await request.text();
+        return HttpResponse.json({ access_token: "fresh", token_type: "Bearer", expires_in: 900 });
       }),
     );
     const res = await apiFetch<{ email: string }>("/accounts/me");
     expect(res.email).toBe("ok@b.c");
     expect(calls).toBe(1);
+    expect(refreshBody).toBe("");
     expect(tokenStore.getAccessToken()).toBe("fresh");
+    expect(localStorage.getItem("rst:refresh")).toBeNull();
   });
 
   it("throws ApiError with status on non-2xx (no refresh path)", async () => {
@@ -59,7 +63,6 @@ describe("apiFetch", () => {
 
   it("reuses the same cid across a 401 refresh+retry", async () => {
     tokenStore.setAccessToken("stale");
-    tokenStore.setRefreshToken("rt-1");
     const cids: string[] = [];
     server.use(
       http.get("/api/accounts/me", ({ request }) => {
@@ -69,7 +72,7 @@ describe("apiFetch", () => {
         return HttpResponse.json({ email: "ok@b.c" });
       }),
       http.post("/api/auth/refresh", () =>
-        HttpResponse.json({ access_token: "fresh", refresh_token: "rt-1", token_type: "Bearer", expires_in: 900 })),
+        HttpResponse.json({ access_token: "fresh", token_type: "Bearer", expires_in: 900 })),
     );
     await apiFetch("/accounts/me");
     expect(cids).toHaveLength(2);
