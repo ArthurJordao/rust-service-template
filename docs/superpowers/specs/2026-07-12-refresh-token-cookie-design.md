@@ -61,8 +61,10 @@ Cookies are set/read via `axum`'s header plumbing (a small helper; or the
   and issuance are unchanged.
 - **`POST /auth/refresh`:** stop taking `RefreshRequest` from the body; read `rt` from
   the cookie. Same validation as today (type == "refresh", found, not revoked, user
-  exists), issue a fresh access token, **re-set the `rt` cookie** (sliding
-  expiration), return `AccessTokenResponse`. Missing/!parse cookie → 401.
+  exists), issue a fresh access token, **re-set the `rt` cookie** (refreshes the
+  cookie's `Max-Age`, but the re-emitted refresh JWT keeps its original `exp` — so
+  the session still hard-caps at the refresh TTL from first issuance; refreshing does
+  not extend that ceiling), return `AccessTokenResponse`. Missing/!parse cookie → 401.
 - **`POST /auth/logout`:** read `rt` from the cookie (not the body), revoke that jti
   (idempotent), and clear the cookie (`Set-Cookie: rt=; Max-Age=0; Path=/api/auth`).
 - **OpenAPI:** update the three route response bodies; regenerate `schema.d.ts`
